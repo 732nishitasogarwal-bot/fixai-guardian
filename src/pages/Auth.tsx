@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/input-otp";
 
 import { useAuth } from "@/hooks/use-auth";
-import logo from "@/assets/logo.svg";
+import { HeartPulse } from "lucide-react";
 import { ArrowRight, Loader2, Mail, UserX } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
@@ -121,18 +121,20 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
             <>
               <CardHeader className="text-center">
               <div className="flex justify-center">
-                    <img
-                      src={logo}
-                      alt="Lock Icon"
-                      width={64}
-                      height={64}
-                      className="rounded-lg mb-4 mt-4 cursor-pointer"
+                    <button
+                      type="button"
+                      aria-label="FixAI home"
                       onClick={() => navigate("/")}
-                    />
+                      className="mb-4 mt-4 flex size-14 cursor-pointer items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-soft transition-transform hover:scale-105"
+                    >
+                      <HeartPulse className="size-7" />
+                    </button>
                   </div>
-                <CardTitle className="text-xl">Get Started</CardTitle>
+                <CardTitle className="text-xl">
+                  Sign in to Fix<span className="text-primary">AI</span>
+                </CardTitle>
                 <CardDescription>
-                  Enter your email to log in or sign up
+                  Connect your device and start self-healing monitoring
                 </CardDescription>
               </CardHeader>
               <form onSubmit={handleEmailSubmit}>

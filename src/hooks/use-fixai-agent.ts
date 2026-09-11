@@ -128,10 +128,10 @@ export function useFixAiAgent(): FixAiAgent {
     if (!isMonitoring) return;
     const id = window.setInterval(() => {
       simRef.current = nextSample({ ...simRef.current, fault: faultRef.current });
-      const window = simRef.current.samples;
-      setSamples(window);
+      const buf = simRef.current.samples;
+      setSamples(buf);
 
-      const latest = window[window.length - 1];
+      const latest = buf[buf.length - 1];
       const verdict = deriveVerdict(latest);
 
       // Fire an incident when risk is HIGH and nothing is open.

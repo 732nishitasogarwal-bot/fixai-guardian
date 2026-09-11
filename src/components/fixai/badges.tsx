@@ -65,7 +65,7 @@ export function IncidentStatusBadge({
   };
   return (
     <Badge variant="outline" className={cn(map[status] ?? "", "font-medium", className)}>
-      {status.replaceAll("_", " ")}
+      {status.replace(/_/g, " ")}
     </Badge>
   );
 }

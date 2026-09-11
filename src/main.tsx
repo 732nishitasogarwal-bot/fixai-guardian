@@ -12,7 +12,13 @@ import "./index.css";
 // Lazy load route components for better code splitting
 const Landing = lazy(() => import("./pages/Landing.tsx"));
 const AuthPage = lazy(() => import("./pages/Auth.tsx"));
+const AppShell = lazy(() => import("./components/fixai/AppShell.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
+const Monitor = lazy(() => import("./pages/Monitor.tsx"));
+const Incidents = lazy(() => import("./pages/Incidents.tsx"));
+const Recovery = lazy(() => import("./pages/Recovery.tsx"));
+const History = lazy(() => import("./pages/History.tsx"));
+const Permissions = lazy(() => import("./pages/Permissions.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
 // Simple loading fallback for route transitions
@@ -107,6 +113,10 @@ function RouteSyncer() {
   return null;
 }
 
+/** Public demo: the full agent runs in-browser; cloud sync activates on sign-in. */
+function DemoApp() {
+  return <AppShell />;
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -128,10 +138,18 @@ createRoot(document.getElementById("root")!).render(
                 path="/dashboard"
                 element={
                   <RequireAuth>
-                    <Dashboard />
+                    <AppShell />
                   </RequireAuth>
                 }
-              />
+              >
+                <Route index element={<Dashboard />} />
+                <Route path="monitor" element={<Monitor />} />
+                <Route path="incidents" element={<Incidents />} />
+                <Route path="recovery" element={<Recovery />} />
+                <Route path="history" element={<History />} />
+                <Route path="permissions" element={<Permissions />} />
+              </Route>
+              <Route path="/demo" element={<DemoApp />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>

@@ -211,7 +211,7 @@ export function computeShap(s: TelemetrySample): ShapAttribution[] {
     { feature: "Memory Usage", value: s.ram, w: 0.035, fmt: "%" },
     { feature: "Response Latency", value: s.latency, w: 0.0011, fmt: "ms" },
     { feature: "HTTP 5xx Rate", value: s.errorRate, w: 0.045, fmt: "%" },
-    { feature: "Disk Usage", value: s.disk, w: 0.022, fmt: "%" },
+    { feature: "Disk Usage", value: s.disk, w: 0.09, fmt: "%" },
   ];
   return attrs
     .map((a) => ({

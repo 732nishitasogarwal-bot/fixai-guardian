@@ -294,7 +294,7 @@ export default function Dashboard() {
           body="Manual playbooks and guarded automated execution."
         />
       </div>
-
+    </div>
   );
 }
 
