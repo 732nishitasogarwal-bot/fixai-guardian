@@ -200,6 +200,118 @@ export const ingestTelemetry = mutation({
   },
 });
 
+// ── Pending Actions API (for Python agent) ───────────────────────────
+
+/**
+ * Query: find pending actions for a device by name.
+ * Used by the agent HTTP bridge to return incidents awaiting recovery.
+ * Returns incidents with status OPEN or PENDING_APPROVAL for the named device.
+ */
+export const getPendingActionsForDevice = query({
+  args: { deviceName: v.string() },
+  handler: async (ctx, { deviceName }) => {
+    // Find the device by name
+    const device = await ctx.db
+      .query("devices")
+      .filter((q) => q.eq(q.field("name"), deviceName))
+      .first();
+    if (!device) return null; // signals 404 to the HTTP action
+
+    // Find incidents that are awaiting agent action
+    const incidents = await ctx.db
+      .query("incidents")
+      .withIndex("by_device", (q) => q.eq("deviceId", device._id))
+      .collect();
+
+    return incidents.filter(
+      (inc) => inc.status === "OPEN" || inc.status === "PENDING_APPROVAL",
+    );
+  },
+});
+
+/**
+ * Mutation: set an incident to PENDING_APPROVAL so the Python agent
+ * will pick it up on its next poll.
+ * Called by the React dashboard when the user clicks "Automated Fix".
+ */
+export const requestAutoFix = mutation({
+  args: {
+    incidentId: v.id("incidents"),
+    playbookName: v.string(),
+  },
+  handler: async (ctx, { incidentId, playbookName }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const incident = await ctx.db.get(incidentId);
+    if (!incident) throw new Error("Incident not found");
+    if (incident.userId !== userId) throw new Error("Not authorized for this incident");
+
+    // Only allow transitioning from OPEN to PENDING_APPROVAL
+    if (incident.status !== "OPEN") {
+      throw new Error(`Cannot request auto-fix: incident is ${incident.status}`);
+    }
+
+    await ctx.db.patch(incidentId, {
+      status: "PENDING_APPROVAL",
+      mode: "AUTOMATED",
+      playbookName,
+    });
+
+    await ctx.db.insert("auditLogs", {
+      userId,
+      timestamp: Date.now(),
+      actor: "USER",
+      action: `Requested auto-fix: ${playbookName}`,
+      decision: "PENDING_APPROVAL",
+      reason: `Incident ${incidentId} escalated to automated recovery`,
+    });
+
+    return { ok: true };
+  },
+});
+
+/**
+ * Mutation: atomically claim an incident for execution.
+ * Changes status from OPEN or PENDING_APPROVAL to EXECUTING.
+ * Returns { ok: true } if claimed, { ok: false } if already claimed.
+ * Called by the Python agent after receiving a pending action.
+ */
+export const claimIncident = mutation({
+  args: {
+    incidentId: v.id("incidents"),
+    agentName: v.string(),
+  },
+  handler: async (ctx, { incidentId, agentName }) => {
+    const incident = await ctx.db.get(incidentId);
+    if (!incident) throw new Error("Incident not found");
+
+    // Only OPEN or PENDING_APPROVAL can be claimed
+    if (incident.status !== "OPEN" && incident.status !== "PENDING_APPROVAL") {
+      return { ok: false, reason: `Already in status: ${incident.status}` };
+    }
+
+    // Atomic claim: patch to EXECUTING
+    await ctx.db.patch(incidentId, {
+      status: "EXECUTING",
+      executedBy: agentName,
+    });
+
+    // Audit log — use the device's userId
+    const userId = incident.userId;
+    await ctx.db.insert("auditLogs", {
+      userId,
+      timestamp: Date.now(),
+      actor: agentName,
+      action: `Claimed incident for execution: ${incident.playbookName ?? "unknown"}`,
+      decision: "EXECUTING",
+      reason: `Incident ${incidentId} claimed by agent`,
+    });
+
+    return { ok: true };
+  },
+});
+
 /** Resolve an incident after successful or failed recovery. */
 export const resolveIncident = mutation({
   args: {

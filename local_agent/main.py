@@ -148,7 +148,11 @@ def _post_ingest(payload: Dict[str, Any]) -> Optional[Dict]:
 
 
 def _get_pending_actions() -> Optional[list]:
-    """Poll Convex for pending recovery actions (future endpoint)."""
+    """Poll Convex for pending recovery actions.
+
+    Returns a list of action dicts from the pending-actions endpoint,
+    or None if the endpoint is unreachable.
+    """
     url = f"{CONVEX_URL}/api/v1/agent/pending-actions"
     try:
         resp = requests.get(
@@ -159,10 +163,41 @@ def _get_pending_actions() -> Optional[list]:
         )
         if resp.ok:
             data = resp.json()
-            return data.get("actions", [])
-    except requests.RequestException:
-        pass
+            if data.get("success"):
+                return data.get("actions", [])
+            log.debug("Pending actions response: %s", data)
+    except requests.RequestException as exc:
+        log.debug("Pending-actions unreachable: %s", exc)
     return None
+
+
+def _post_claim_action(incident_id: str, agent_name: str = "fixai-agent") -> Optional[Dict]:
+    """Claim a pending action atomically to prevent duplicate execution.
+
+    Returns the JSON response on success, None on failure.
+    The agent MUST claim before executing to prevent double-execution.
+    """
+    url = f"{CONVEX_URL}/api/v1/agent/claim-action"
+    try:
+        resp = requests.post(
+            url,
+            json={"incident_id": incident_id, "agent_name": agent_name},
+            headers=_api_headers(),
+            timeout=10,
+        )
+        data = resp.json()
+        if resp.ok and data.get("success"):
+            return data
+        log.warning(
+            "Claim %s — status=%s body=%s",
+            incident_id,
+            resp.status_code,
+            str(data)[:200],
+        )
+        return None
+    except requests.RequestException as exc:
+        log.debug("Claim unreachable: %s", exc)
+        return None
 
 
 def _post_resolve(payload: Dict[str, Any]) -> Optional[Dict]:
@@ -334,19 +369,57 @@ def run() -> None:
             pending = _get_pending_actions()
             if pending:
                 for action in pending:
-                    log.info("🔧  Executing playbook: %s", action.get("playbook_name"))
-                    result = executor.execute(action)
+                    incident_id = action.get("incidentId")
+                    playbook_id = action.get("playbookId", "flush_cache")
+                    playbook_name = action.get("playbookName", playbook_id)
+                    requires_perm = action.get("requiresPermission", False)
+
+                    log.info(
+                        "🔧  Pending action: %s (incident=%s, risk=%s)",
+                        playbook_name,
+                        incident_id,
+                        action.get("risk"),
+                    )
+
+                    # Step A: Claim the action to prevent duplicate execution
+                    claim = _post_claim_action(incident_id)
+                    if not claim:
+                        log.warning(
+                            "Could not claim incident %s — skipping",
+                            incident_id,
+                        )
+                        continue
+
+                    log.info("   Claimed — status is now EXECUTING")
+
+                    # Step B: Execute the playbook via the safe executor
+                    # MEDIUM risk requires user confirmation (already approved
+                    # because the dashboard set PENDING_APPROVAL).
+                    user_confirmed = not requires_perm
+                    result = executor.execute(
+                        playbook_id=playbook_id,
+                        params=action.get("parameters", {}),
+                        user_confirmed=user_confirmed,
+                    )
+
+                    # Step C: Report the result back to Convex
+                    success = result.status.value == "SUCCESS"
                     _post_resolve(
                         {
-                            "incident_id": action.get("incident_id"),
-                            "status": "RESOLVED" if result["success"] else "FAILED",
-                            "is_health_restored": result["success"],
+                            "incident_id": incident_id,
+                            "status": "RESOLVED" if success else "FAILED",
+                            "is_health_restored": success,
                             "mode": "AUTOMATED",
-                            "playbook_name": action.get("playbook_name", "unknown"),
-                            "post_fix_note": result.get("message", ""),
-                            "soak_seconds": result.get("soak_seconds", 5),
+                            "playbook_name": playbook_name,
+                            "post_fix_note": result.message,
+                            "soak_seconds": 5,
                         }
                     )
+
+                    if success:
+                        log.info("   ✓ Recovery validated for %s", playbook_name)
+                    else:
+                        log.warning("   ✗ Recovery FAILED for %s: %s", playbook_name, result.message)
 
         # ── 6. Sleep ────────────────────────────────────────────────────
         time.sleep(POLL_INTERVAL)

@@ -179,7 +179,168 @@ export const agentResolve = httpAction(async (ctx, request) => {
   }
 });
 
+// ─── GET /api/v1/agent/pending-actions ─────────────────────────────────
+// Returns incidents with OPEN or PENDING_APPROVAL status for a given device.
+// The Python agent polls this endpoint to discover recovery work.
+//
+// Query params: ?device_name=My Laptop
+// Headers:      X-API-Key: <CONVEX_DEVICE_API_KEY>
+// Response:     { success: true, deviceId: "...", actions: [...] }
+
+export const agentPendingActions = httpAction(async (ctx, request) => {
+  // ── 1. Authenticate ────────────────────────────────────────────────
+  if (!requireApiKey(request)) {
+    return jsonResponse({ success: false, error: "Unauthorized" }, 401);
+  }
+
+  // ── 2. Parse device_name from query string ──────────────────────────
+  const url = new URL(request.url);
+  const deviceName = url.searchParams.get("device_name");
+  if (!deviceName) {
+    return jsonResponse(
+      { success: false, error: "Missing device_name query parameter" },
+      400,
+    );
+  }
+
+  // ── 3. Look up the device and its pending incidents ─────────────────
+  const pendingIncidents = await ctx.runQuery(
+    api.devices.getPendingActionsForDevice,
+    { deviceName },
+  );
+
+  if (pendingIncidents === null) {
+    return jsonResponse(
+      { success: false, error: "Device not found", device_name: deviceName },
+      404,
+    );
+  }
+
+  // ── 4. Map incidents to action payloads for the Python executor ─────
+  const actions = pendingIncidents.map((inc: any) => {
+    // Determine the playbook to execute based on the incident's root cause
+    const playbookMap: Record<string, string> = {
+      "CPU Exhaustion": "kill_high_mem_process",
+      "Memory Exhaustion": "kill_high_mem_process",
+      "Disk I/O Saturation": "flush_cache",
+      "Network Latency Degradation": "retry_service",
+      "Application Error Storm": "restart_background_service",
+    };
+
+    // Use the playbook name from the incident if set, otherwise map from cause
+    const playbookId =
+      inc.playbookName && PLAYBOOK_TO_ID[inc.playbookName]
+        ? PLAYBOOK_TO_ID[inc.playbookName]
+        : playbookMap[inc.primaryCause] || "flush_cache";
+
+    // Determine risk tier
+    const riskMap: Record<string, string> = {
+      LOW: "LOW",
+      MEDIUM: "MEDIUM",
+      HIGH: "HIGH",
+    };
+
+    return {
+      incidentId: inc._id,
+      deviceId: inc.deviceId,
+      status: inc.status,
+      risk: riskMap[inc.risk] || "MEDIUM",
+      playbookId,
+      playbookName: inc.playbookName || inc.primaryCause,
+      parameters: {}, // typed params, never raw shell
+      primaryCause: inc.primaryCause,
+      explanation: inc.explanation,
+      requiresPermission: inc.risk !== "LOW",
+      createdAt: inc.detectedAt,
+      shap: inc.shap,
+    };
+  });
+
+  return jsonResponse({
+    success: true,
+    deviceId: pendingIncidents[0]?.deviceId ?? null,
+    actions,
+  });
+});
+
+// ─── POST /api/v1/agent/claim-action ─────────────────────────────────────
+// Atomically claims a pending action so the agent can execute it.
+// Prevents duplicate execution across multiple agent poll cycles.
+//
+// Body:         { incident_id: "...", agent_name: "fixai-agent" }
+// Headers:      X-API-Key: <CONVEX_DEVICE_API_KEY>
+// Response:     { success: true, status: "EXECUTING" }
+//               or { success: false, reason: "Already in status: ..." }
+
+export const agentClaimAction = httpAction(async (ctx, request) => {
+  // ── 1. Authenticate ────────────────────────────────────────────────
+  if (!requireApiKey(request)) {
+    return jsonResponse({ success: false, error: "Unauthorized" }, 401);
+  }
+
+  // ── 2. Parse body ──────────────────────────────────────────────────
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ success: false, error: "Invalid JSON body" }, 400);
+  }
+
+  const { incident_id, agent_name } = body;
+  if (!incident_id || !agent_name) {
+    return jsonResponse(
+      {
+        success: false,
+        error: "Missing required fields: incident_id, agent_name",
+      },
+      400,
+    );
+  }
+
+  // ── 3. Attempt atomic claim ────────────────────────────────────────
+  try {
+    const result = await ctx.runMutation(api.devices.claimIncident, {
+      incidentId: incident_id,
+      agentName: agent_name,
+    });
+
+    if (result.ok) {
+      return jsonResponse({ success: true, status: "EXECUTING" });
+    }
+    return jsonResponse(
+      { success: false, reason: result.reason },
+      409,
+    );
+  } catch (err: any) {
+    return jsonResponse(
+      { success: false, error: `Claim failed: ${err.message}` },
+      500,
+    );
+  }
+});
+
 // ─── Helper functions ──────────────────────────────────────────────────
+
+/** Maps playbook display names to IDs used by the Python executor. */
+const PLAYBOOK_TO_ID: Record<string, string> = {
+  "Flush Application Cache": "flush_cache",
+  "Retry Failed Requests": "retry_service",
+  "Terminate High-Memory Process": "kill_high_mem_process",
+  "Restart Background Service": "restart_background_service",
+};
+
+function requireApiKey(request: Request): boolean {
+  const apiKey = request.headers.get("X-API-Key");
+  const expectedKey = process.env.CONVEX_DEVICE_API_KEY;
+  return !!expectedKey && apiKey === expectedKey;
+}
+
+function jsonResponse(body: any, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 function statusFromRisk(risk: string): "HEALTHY" | "DEGRADED" | "CRITICAL" {
   if (risk === "HIGH") return "CRITICAL";
