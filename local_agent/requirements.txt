@@ -1,0 +1,18 @@
+# FixAI Local Agent — Python Dependencies
+# ==========================================
+# Install: pip install -r requirements.txt
+
+# Core agent
+psutil>=5.9.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Edge ML (Step 3)
+scikit-learn>=1.3.0
+xgboost>=2.0.0
+shap>=0.43.0
+joblib>=1.3.0
+numpy>=1.24.0
+
+# Recovery executor (Step 4)
+# (uses only stdlib: subprocess, json, os)

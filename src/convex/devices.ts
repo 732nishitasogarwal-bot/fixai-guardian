@@ -15,6 +15,21 @@ const specsValidator = v.object({
   ramGb: v.number(),
 });
 
+/**
+ * Look up a device by name (used by the agent bridge HTTP action).
+ * Returns the device _id if found, null otherwise.
+ */
+export const findDeviceByName = query({
+  args: { name: v.string() },
+  handler: async (ctx, { name }) => {
+    const device = await ctx.db
+      .query("devices")
+      .filter((q) => q.eq(q.field("name"), name))
+      .first();
+    return device?._id ?? null;
+  },
+});
+
 export const getMyDevice = query({
   args: {},
   handler: async (ctx) => {
