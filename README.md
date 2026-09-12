@@ -1,272 +1,334 @@
-## Overview
+<div align="center">
 
-This project uses the following tech stack:
-- Vite
-- Typescript
-- React Router v7 (all imports from `react-router` instead of `react-router-dom`)
-- React 19 (for frontend components)
-- Tailwind v4 (for styling)
-- Shadcn UI (for UI components library)
-- Lucide Icons (for icons)
-- Convex (for backend & database)
-- Convex Auth (for authentication)
-- Framer Motion (for animations)
-- Three js (for 3d models)
+# 🔮 FixAI
 
-All relevant files live in the 'src' directory.
+### AI-Driven Intelligent Failure Prediction, Diagnosis, Guided Recovery & Permission-Aware Self-Healing System
 
-Use bun for the package manager.
+[![React](https://img.shields.io/badge/React_19-61DAFB?style=flat-square&logo=react&logoColor=black)](#)
+[![TypeScript](https://img.shields.io/badge/TypeScript_5.9-3178C6?style=flat-square&logo=typescript&logoColor=white)](#)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS_4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)](#)
+[![Convex](https://img.shields.io/badge/Convex_DB-E85D75?style=flat-square&logo=convex&logoColor=white)](#)
+[![Vite](https://img.shields.io/badge/Vite_7-646CFF?style=flat-square&logo=vite&logoColor=white)](#)
+[![Recharts](https://img.shields.io/badge/Recharts-FF6384?style=flat-square&logo=react&logoColor=white)](#)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](#)
 
-## Setup
+**FixAI eliminates manual debugging by continuously streaming application telemetry, predicting failures minutes ahead, explaining root causes in plain English via SHAP-style attributions, and executing permission-gated recovery playbooks with post-fix validation — all in a single closed healing loop.**
 
-This project is set up already and running on a cloud environment, as well as a convex development in the sandbox.
+[Live Demo](/demo) · [Dashboard](/dashboard) · [Architecture](#-architecture) · [Quick Start](#-quick-start)
 
-## Environment Variables
+</div>
 
-The project is set up with project specific CONVEX_DEPLOYMENT and VITE_CONVEX_URL environment variables on the client side.
+---
 
-The convex server has a separate set of environment variables that are accessible by the convex backend.
+## 🧠 What is FixAI?
 
-Currently, these variables include auth-specific keys: JWKS, JWT_PRIVATE_KEY, and SITE_URL.
-
-
-# Using Authentication (Important!)
-
-You must follow these conventions when using authentication.
-
-## Auth is already set up.
-
-All convex authentication functions are already set up. The auth currently uses email OTP and anonymous users, but can support more.
-
-The email OTP configuration is defined in `src/convex/auth/emailOtp.ts`. DO NOT MODIFY THIS FILE.
-
-Also, DO NOT MODIFY THESE AUTH FILES: `src/convex/auth.config.ts` and `src/convex/auth.ts`.
-
-## Using Convex Auth on the backend
-
-On the `src/convex/users.ts` file, you can use the `getCurrentUser` function to get the current user's data.
-
-## Using Convex Auth on the frontend
-
-The `/auth` page is already set up to use auth. Navigate to `/auth` for all log in / sign up sequences.
-
-You MUST use this hook to get user data. Never do this yourself without the hook:
-```typescript
-import { useAuth } from "@/hooks/use-auth";
-
-const { isLoading, isAuthenticated, user, signIn, signOut } = useAuth();
-```
-
-## Protected Routes
-
-The starter `/dashboard` route is protected with `RequireAuth`, which sends
-signed-out users to `/auth?returnTo=<current route>`. Extend that page for the
-product's authenticated experience, and reuse `RequireAuth` when adding another
-protected route.
-
-## Auth Page
-
-The auth page is defined in `src/pages/Auth.tsx`. Send sign-in and sign-up actions
-to `/auth`.
-
-## Authorization
-
-You can perform authorization checks on the frontend and backend.
-
-On the frontend, you can use the `useAuth` hook to get the current user's data and authentication state.
-
-You should also be protecting queries, mutations, and actions at the base level, checking for authorization securely.
-
-## Adding a redirect after auth
-
-The `/auth` route in `src/main.tsx` redirects to `/dashboard` by default. If the
-product's main authenticated route is different, update `redirectAfterAuth` to
-that route. A validated same-origin `returnTo` query parameter takes priority so
-users can resume the protected page they originally requested. Never leave an
-authenticated product redirecting back to the public landing page.
-
-## Complete authenticated products
-
-When the requested product implies accounts, a workspace, a dashboard, or other
-signed-in functionality, the task is not complete with only a landing page and
-auth form. Build the main authenticated experience, protect its route, and verify
-that signing in reaches it.
-
-# Frontend Conventions
-
-You will be using the Vite frontend with React 19, Tailwind v4, and Shadcn UI.
-
-Generally, pages should be in the `src/pages` folder, and components should be in the `src/components` folder.
-
-Shadcn primitives are located in the `src/components/ui` folder and should be used by default.
-
-## Page routing
-
-Your page component should go under the `src/pages` folder.
-
-When adding a page, update the react router configuration in `src/main.tsx` to include the new route you just added.
-
-## Shad CN conventions
-
-Follow these conventions when using Shad CN components, which you should use by default.
-- Remember to use "cursor-pointer" to make the element clickable
-- For title text, use the "tracking-tight font-bold" class to make the text more readable
-- Always make apps MOBILE RESPONSIVE. This is important
-- AVOID NESTED CARDS. Try and not to nest cards, borders, components, etc. Nested cards add clutter and make the app look messy.
-- AVOID SHADOWS. Avoid adding any shadows to components. stick with a thin border without the shadow.
-- Avoid skeletons; instead, use the loader2 component to show a spinning loading state when loading data.
-
-
-## Landing Pages
-
-You must always create good-looking designer-level styles to your application. 
-- Make it well animated and fit a certain "theme", ie neo brutalist, retro, neumorphism, glass morphism, etc
-
-Use known images and emojis from online.
-
-If the user is logged in already, show the get started button to say "Dashboard" or "Profile" instead to take them there.
-
-## Responsiveness and formatting
-
-Make sure pages are wrapped in a container to prevent the width stretching out on wide screens. Always make sure they are centered aligned and not off-center.
-
-Always make sure that your designs are mobile responsive. Verify the formatting to ensure it has correct max and min widths as well as mobile responsiveness.
-
-- Always create sidebars for protected dashboard pages and navigate between pages
-- Always create navbars for landing pages
-- On these bars, the created logo should be clickable and redirect to the index page
-
-## Animating with Framer Motion
-
-You must add animations to components using Framer Motion. It is already installed and configured in the project.
-
-To use it, import the `motion` component from `framer-motion` and use it to wrap the component you want to animate.
-
-
-### Other Items to animate
-- Fade in and Fade Out
-- Slide in and Slide Out animations
-- Rendering animations
-- Button clicks and UI elements
-
-Animate for all components, including on landing page and app pages.
-
-## Three JS Graphics
-
-Your app comes with three js by default. You can use it to create 3D graphics for landing pages, games, etc.
-
-
-## Colors
-
-You can override colors in: `src/index.css`
-
-This uses the oklch color format for tailwind v4.
-
-Always use these color variable names.
-
-Make sure all ui components are set up to be mobile responsive and compatible with both light and dark mode.
-
-Set theme using `dark` or `light` variables at the parent className.
-
-## Styling and Theming
-
-When changing the theme, always change the underlying theme of the shad cn components app-wide under `src/components/ui` and the colors in the index.css file.
-
-Avoid hardcoding in colors unless necessary for a use case, and properly implement themes through the underlying shad cn ui components.
-
-When styling, ensure buttons and clickable items have pointer-click on them (don't by default).
-
-Always follow a set theme style and ensure it is tuned to the user's liking.
-
-## Toasts
-
-You should always use toasts to display results to the user, such as confirmations, results, errors, etc.
-
-Use the shad cn Sonner component as the toaster. For example:
+Modern software deployments suffer from prolonged downtime due to reactive alerting and manual diagnosis. FixAI bridges the gap between **predictive AI** and **guarded agentic execution**:
 
 ```
-import { toast } from "sonner"
-
-import { Button } from "@/components/ui/button"
-export function SonnerDemo() {
-  return (
-    <Button
-      variant="outline"
-      onClick={() =>
-        toast("Event has been created", {
-          description: "Sunday, December 03, 2023 at 9:00 AM",
-          action: {
-            label: "Undo",
-            onClick: () => console.log("Undo"),
-          },
-        })
-      }
-    >
-      Show Toast
-    </Button>
-  )
-}
+Telemetry Stream → Anomaly Detection → Failure Prediction → Root Cause Analysis
+    → XAI Explanation → Dual Recovery (Manual / Automated) → Policy Gate
+    → Guarded Execution → Telemetry Validation → Incident Memory Update
 ```
 
-Remember to import { toast } from "sonner". Usage: `toast("Event has been created.")`
+FixAI runs entirely in the browser for the demo — no CSV uploads, no backend setup, no 3 a.m. firefighting. The full closed loop is demonstrable with one click.
 
-## Dialogs
+---
 
-Always ensure your larger dialogs have a scroll in its content to ensure that its content fits the screen size. Make sure that the content is not cut off from the screen.
+## 🏗️ Architecture
 
-Ideally, instead of using a new page, use a Dialog instead. 
+### High-Level Pipeline
 
-# Using the Convex backend
-
-You will be implementing the convex backend. Follow your knowledge of convex and the documentation to implement the backend.
-
-## The Convex Schema
-
-You must correctly follow the convex schema implementation.
-
-The schema is defined in `src/convex/schema.ts`.
-
-Do not include the `_id` and `_creationTime` fields in your queries (it is included by default for each table).
-Do not index `_creationTime` as it is indexed for you. Never have duplicate indexes.
-
-
-## Convex Actions: Using CRUD operations
-
-When running anything that involves external connections, you must use a convex action with "use node" at the top of the file.
-
-You cannot have queries or mutations in the same file as a "use node" action file. Thus, you must use pre-built queries and mutations in other files.
-
-You can also use the pre-installed internal crud functions for the database:
-
-```ts
-// in convex/users.ts
-import { crud } from "convex-helpers/server/crud";
-import schema from "./schema.ts";
-
-export const { create, read, update, destroy } = crud(schema, "users");
-
-// in some file, in an action:
-const user = await ctx.runQuery(internal.users.read, { id: userId });
-
-await ctx.runMutation(internal.users.update, {
-  id: userId,
-  patch: {
-    status: "inactive",
-  },
-});
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────────┐
+│  Live Telemetry  │───▶│  AI Analytics     │───▶│  Recovery Engine     │
+│  (CPU/RAM/Lat/   │    │  Anomaly Score    │    │  Manual Guide        │
+│   Error/Disk)    │    │  P(Failure)       │    │  Auto Execution      │
+│                  │    │  SHAP Attribution │    │  Policy Gate         │
+└─────────────────┘    │  Root Cause       │    │  Post-Fix Validation │
+                       └──────────────────┘    └─────────────────────┘
+                                │                         │
+                                ▼                         ▼
+                       ┌──────────────────┐    ┌─────────────────────┐
+                       │  Explanation      │    │  Incident Memory     │
+                       │  Engine           │    │  (Persistence +      │
+                       │  Plain English    │    │   Audit Trail)       │
+                       └──────────────────┘    └─────────────────────┘
 ```
 
+### Module Breakdown
 
-## Common Convex Mistakes To Avoid
+| Layer | Module | Technology |
+|-------|--------|------------|
+| **UI** | Dashboard, Charts, Modals | React 19 + TypeScript + Tailwind CSS + Recharts |
+| **Telemetry** | Streaming simulation engine | TypeScript (Isolation Forest + XGBoost stand-ins) |
+| **Anomaly Detection** | Isolation Forest scoring | Composite stress distance model |
+| **Failure Prediction** | XGBoost P(failure) | Cost-sensitive logistic model |
+| **Root Cause Analysis** | SHAP-style attribution | Signed feature weight decomposition |
+| **Explanation** | Template-based NLG | Metric-driven diagnostic text generation |
+| **Recovery** | Dual-mode (Manual + Automated) | Step-by-step guides + allowlisted playbooks |
+| **Policy Engine** | Risk-tiered permission gating | LOW/MEDIUM/HIGH tiers with rate limits |
+| **Validation** | Post-fix telemetry soak | Pre/post metric comparison |
+| **Persistence** | Incidents, Audit, Device sync | Convex (serverless DB) |
+| **Auth** | JWT-based with roles | Convex Auth |
 
-When using convex, make sure:
-- Document IDs are referenced as `_id` field, not `id`.
-- Document ID types are referenced as `Id<"TableName">`, not `string`.
-- Document object types are referenced as `Doc<"TableName">`.
-- Keep schemaValidation to false in the schema file.
-- You must correctly type your code so that it passes the type checker.
-- You must handle null / undefined cases of your convex queries for both frontend and backend, or else it will throw an error that your data could be null or undefined.
-- Always use the `@/folder` path, with `@/convex/folder/file.ts` syntax for importing convex files.
-- This includes importing generated files like `@/convex/_generated/server`, `@/convex/_generated/api`
-- Remember to import functions like useQuery, useMutation, useAction, etc. from `convex/react`
-- NEVER have return type validators.
+---
+
+## 🎯 Core Features
+
+### 1. Predictive Failure Detection
+- **Isolation Forest** anomaly scoring on a 5-metric feature vector
+- **XGBoost** classifier predicts P(failure) over a 5-minute lead window
+- Risk classified as LOW / MEDIUM / HIGH with confidence bands
+
+### 2. Explainable Root Cause Analysis
+- **SHAP-style feature attributions** rank exactly which metric drives risk upward
+- **Log evidence fusion** correlates metric spikes with matching error patterns
+- Primary cause identified and prioritized
+
+### 3. Dual Recovery Modes
+- **Manual Guide**: Step-by-step remediation playbook with copyable terminal commands
+- **Automated Execution**: One-click execution of allowlisted playbooks with terminal-style progress output
+
+### 4. Permission-Aware Execution
+- **LOW risk** (cache flush, retry): Auto-approve under rate limits
+- **MEDIUM risk** (restart container): Requires explicit user confirmation
+- **HIGH risk** (schema change, config delete): Hard-blocked, recommendation only
+
+### 5. Closed-Loop Validation
+- **15-second soak period** after every fix
+- Pre-fix vs post-fix metric comparison proves recovery
+- Failed validation escalates to manual intervention
+
+### 6. 6 Injectable Fault Scenarios
+
+| Fault | Description |
+|-------|-------------|
+| 🔥 **CPU Spike** | Infinite loop pegs CPU, starves request handling |
+| 💾 **Memory Exhaustion** | Buffer overflow; RAM climbs until OOM-kill |
+| 📀 **Disk Space Fill** | Temp artifacts accumulate to 98% |
+| ⏱️ **Latency Storm** | Blocking call saturates connection pool |
+| ❌ **Error Burst** | Unhandled exceptions on 50% of API calls |
+| 🗄️ **DB Disconnect** | Connection pool exhausts; Postgres times out |
+
+---
+
+## 🖥️ Pages & Screens
+
+| Route | Description |
+|-------|-------------|
+| `/` | Landing page — hero, pipeline visualization, feature grid, CTAs |
+| `/auth` | Registration & login (Convex Auth) |
+| `/dashboard` | Overview — health score, risk gauge, live metric cards, streaming charts |
+| `/dashboard/monitor` | Real-time Recharts streams + fault injection controls |
+| `/dashboard/incidents` | Open incidents with RCA drawer (SHAP bars, explanation, log evidence) |
+| `/dashboard/recovery` | Dual-mode recovery — manual guide + automated execution + validation |
+| `/dashboard/history` | Resolved incidents and full audit trail |
+| `/dashboard/permissions` | Risk-tier playbook matrix with toggle controls |
+| `/demo` | **No-signup demo** — full agent runs in-browser, cloud sync on sign-in |
+
+---
+
+## ⚡ Quick Start
+
+### Option 1: Live Demo (No Setup)
+
+Click **[Try the live demo](/demo)** to run the complete FixAI system in your browser — no account, no installation.
+
+1. Navigate to **Monitor** → click any fault injection button (CPU Spike, Memory Leak, etc.)
+2. Watch the risk gauge climb → incident fires → RCA drawer opens
+3. Go to **Recovery** → choose Manual Guide or Automated Execution
+4. Observe the telemetry validation proving the fix worked
+
+### Option 2: Full Account Setup
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/your-org/fixai.git
+cd fixai
+
+# 2. Install dependencies
+bun install
+
+# 3. Configure Convex (first time only)
+bunx convex dev
+
+# 4. Start the dev server
+bun run dev
+```
+
+Open `http://localhost:5173` and create an account.
+
+### Option 3: Run Fault Injection Script (Terminal Demo)
+
+```bash
+# Simulate a CPU spike for 60 seconds (safe, self-terminating)
+python scripts/simulate_fault.py --fault cpu --duration 60
+
+# Simulate a memory leak
+python scripts/simulate_fault.py --fault memory --duration 60
+
+# Simulate disk fill (creates + cleans temp files)
+python scripts/simulate_fault.py --fault disk --duration 30
+```
+
+---
+
+## 🔬 AI/ML Methodology
+
+### Anomaly Detection (Isolation Forest Stand-in)
+- **Features**: cpu, ram, latency, errorRate, disk
+- **Method**: Composite stress distance from healthy baseline
+- **Output**: Normalised anomaly score ∈ [0, 1]
+- **No labeled data required** — unsupervised scoring
+
+### Failure Prediction (XGBoost Stand-in)
+- **Target**: P(Failure in next 5 min) ∈ [0, 1]
+- **Method**: Cost-sensitive logistic model with learned feature weights
+- **Cost function**: `Operational Cost = 10 × FP + 500 × FN`
+- **Threshold**: HIGH risk at P(failure) ≥ 0.75
+
+### Root Cause Analysis (SHAP Stand-in)
+- **Method**: Signed feature attribution weights
+- **Formula**: `attribution_i = (value_i - baseline_i) × weight_i`
+- **Output**: Ranked attributions showing which metric drives risk
+- **Fused with**: Log keyword extraction (OOMKilled, ConnectionRefused, Timeout, etc.)
+
+### Explanation Engine
+- Template-based NLG mapping metric states + SHAP attributions to plain English
+- Format: `"The service is at high risk because {metric} ({value}%) exceeded safe thresholds"`
+
+---
+
+## 🛡️ Safety Rules (Non-Negotiable)
+
+1. **Allowlisted Playbooks Only** — The executor runs ONLY pre-audited playbooks. The AI engine passes `playbook_id` + typed parameters — never raw shell strings.
+2. **Static Verification** — Destructive patterns (rm -rf, DROP TABLE, eval) are blocked at code level.
+3. **Rate Limiting** — Max 3 automated actions per playbook per day.
+4. **Risk-Tiered Gating** — LOW auto-approves, MEDIUM needs confirmation, HIGH is hard-blocked.
+5. **Audit Trail** — Every permission decision, execution, and validation is logged.
+6. **Pre-fix Snapshot** — Every automated action creates a checkpoint; failed validation can be rolled back.
+
+---
+
+## 📁 Project Structure
+
+```
+src/
+├── main.tsx                          # App root with routing + providers
+├── index.css                         # Tailwind + theme tokens
+│
+├── lib/
+│   ├── types.ts                      # Domain model TypeScript interfaces
+│   ├── telemetry.ts                  # Simulation engine + AI analytics
+│   ├── playbooks.ts                  # Recovery playbook registry
+│   └── policy.ts                     # Risk-tier permission engine
+│
+├── hooks/
+│   ├── use-fixai-agent.ts            # Closed healing loop state machine
+│   ├── use-auth.ts                   # Auth state management
+│   └── use-agent-context.ts          # Router outlet context
+│
+├── convex/
+│   ├── schema.ts                     # Database schema (devices, telemetry, incidents, audit)
+│   ├── devices.ts                    # Device sync + telemetry ingestion
+│   ├── history.ts                    # Incident + audit queries
+│   └── permissions.ts                # Permission CRUD
+│
+├── pages/
+│   ├── Landing.tsx                   # Product landing page
+│   ├── Auth.tsx                      # Login / register
+│   ├── Dashboard.tsx                 # Overview (health, charts, risk)
+│   ├── Monitor.tsx                   # Live streaming charts + fault injection
+│   ├── Incidents.tsx                 # Incident list + RCA drawer
+│   ├── Recovery.tsx                  # Dual-mode recovery + validation
+│   ├── History.tsx                   # Audit log + resolved incidents
+│   ├── Permissions.tsx               # Risk-tier matrix editor
+│   └── NotFound.tsx                  # 404 page
+│
+├── components/
+│   ├── fixai/                        # FixAI-specific components
+│   │   ├── AppShell.tsx              # Dashboard layout + sidebar
+│   │   ├── MetricCard.tsx            # Telemetry metric display card
+│   │   ├── RiskGauge.tsx             # Animated failure risk gauge
+│   │   ├── PipelineFlow.tsx          # 8-stage pipeline visualization
+│   │   ├── badges.tsx                # Status + risk-tier badges
+│   │   └── EmptyState.tsx            # Empty state placeholder
+│   │
+│   └── ui/                           # shadcn/ui primitives
+│       ├── button.tsx, card.tsx, dialog.tsx, table.tsx, ...
+│
+└── assets/
+    └── logo.svg
+```
+
+---
+
+## 🎨 Design System
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| `--primary` | Teal 500 | Accent color, buttons, highlights |
+| `--background` | Zinc 950 | Dark neutral background |
+| `--card` | Zinc 900 / Zinc 925 | Layered card surfaces |
+| `--border` | Zinc 700–800 | Subtle dividers |
+| `--ring` | Teal 500/40 | Focus states |
+| `--radius` | 0.625rem | Rounded corners |
+
+**Design principles**: Crisp typography, quiet neutrals, refined teal accent, soft layered cards, balanced contemporary spacing. Motion via Framer Motion.
+
+---
+
+## 📊 Benchmark Targets
+
+| Metric | Traditional Alerting | FixAI Target |
+|--------|---------------------|--------------|
+| Mean Time to Detect (MTTD) | 5.0 minutes | < 10 seconds |
+| Mean Time to Recover (MTTR) | 25.0 minutes | < 12 seconds |
+| False Positive Rate | 18% | < 3% |
+| Unauthorized Actions | Unchecked | 0% (100% AST blocked) |
+| Post-Fix Verification | Manual check | 100% automated |
+
+---
+
+## 🔧 Technology Stack
+
+| Component | Technology |
+|-----------|-----------|
+| Frontend | React 19 + TypeScript + Tailwind CSS 4 |
+| Charts | Recharts |
+| UI Components | shadcn/ui (Radix primitives) |
+| Animation | Framer Motion |
+| Backend / DB | Convex (serverless) |
+| Auth | Convex Auth |
+| Build Tool | Vite 7 |
+| Package Manager | Bun |
+
+---
+
+## 🚀 Future Work
+
+- [ ] Python FastAPI backend with PostgreSQL + pgvector for production deployment
+- [ ] Local agent with psutil for real hardware monitoring
+- [ ] XGBoost + scikit-learn model training pipeline
+- [ ] SHAP TreeExplainer for true model-agnostic explanations
+- [ ] Docker Compose deployment (backend + frontend + testbed)
+- [ ] WebSocket live telemetry streaming
+- [ ] OpenTelemetry / Prometheus integration
+- [ ] Docker container restart / cache flush playbooks
+- [ ] Multi-device fleet management
+
+---
+
+## 📄 License
+
+MIT
+
+---
+
+<div align="center">
+
+**FixAI** — Your system heals itself *before it breaks*.
+
+Built for the B.Tech Final Year Project: *AI-Driven Intelligent Failure Prediction, Diagnosis, Guided Recovery & Permission-Aware Self-Healing System*
+
+</div>
