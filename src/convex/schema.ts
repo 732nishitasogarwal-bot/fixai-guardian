@@ -72,6 +72,8 @@ const schema = defineSchema(
       deviceId: v.id("devices"),
       detectedAt: v.number(),
       resolvedAt: v.optional(v.number()),
+      /** Last sync that confirmed this incident is still ongoing (dedup heartbeat). */
+      lastSeenAt: v.optional(v.number()),
       status: v.union(
         v.literal("OPEN"),
         v.literal("PENDING_APPROVAL"),

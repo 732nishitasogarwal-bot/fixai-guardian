@@ -1,6 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
+import type { Doc, Id } from "./_generated/dataModel";
 
 /**
  * Device sync: upserts a single "primary" device per user that the simulated
@@ -192,10 +193,11 @@ export const ingestTelemetry = mutation({
     });
 
     if (args.incident) {
-      await ctx.db.insert("incidents", {
+      await recordIncidentObservation(ctx, {
         userId,
         deviceId: args.deviceId,
-        ...args.incident,
+        incoming: args.incident,
+        source: "dashboard",
       });
     }
     if (args.audit) {
@@ -205,6 +207,118 @@ export const ingestTelemetry = mutation({
     return { ok: true };
   },
 });
+
+// ── Incident deduplication (Fix #5) ────────────────────────────────────
+
+/**
+ * Create-or-update an incident for one (device, scenario) observation.
+ *
+ * Incident identity = deviceId × scenarioKey × active-status. A sustained
+ * anomaly must surface as ONE evolving incident, not one row per sync cycle.
+ *
+ * Behavior:
+ *  - Active incident with the same (deviceId, scenarioKey) exists → update it
+ *    in place (lastSeenAt heartbeat + refreshed scores/explanation/SHAP).
+ *    Create and update share this single mutation, so two near-simultaneous
+ *    ingest calls cannot both insert: Convex serialises mutations, so the
+ *    second caller observes the first caller's insert and takes the update
+ *    path (race-safe without extra locking).
+ *  - No active incident → insert a new one. Terminal states (RESOLVED/FAILED)
+ *    never match, so a later recurrence naturally creates a fresh incident —
+ *    future occurrences are never permanently blocked.
+ *  - An incident in EXECUTING/PENDING_APPROVAL is never demoted: telemetry
+ *    updates refresh scores only, never the status.
+ */
+async function recordIncidentObservation(
+  ctx: MutationCtx,
+  args: {
+    userId: Id<"users">;
+    deviceId: Id<"devices">;
+    incoming: Omit<Doc<"incidents">, "_id" | "_creationTime" | "userId" | "deviceId">;
+    source: "agent" | "dashboard";
+  },
+) {
+  const { userId, deviceId, incoming, source } = args;
+
+  // Stable scenario identity; fall back to a namespaced cause string when the
+  // agent did not send a machine-readable key.
+  const scenarioKey = incoming.scenarioKey ?? `cause:${incoming.primaryCause}`;
+
+  // ── 1. Find an ACTIVE incident for this identity ──────────────────
+  const active = await ctx.db
+    .query("incidents")
+    .withIndex("by_device", (q) => q.eq("deviceId", deviceId))
+    .filter((q) =>
+      q.and(
+        q.eq(q.field("scenarioKey"), scenarioKey),
+        q.or(
+          q.eq(q.field("status"), "OPEN"),
+          q.eq(q.field("status"), "PENDING_APPROVAL"),
+          q.eq(q.field("status"), "EXECUTING"),
+        ),
+      ),
+    )
+    .first();
+
+  const now = Date.now();
+
+  // ── 2. Existing active incident → update in place (dedup) ─────────
+  if (active) {
+    await ctx.db.patch(active._id, {
+      lastSeenAt: now,
+      // Latest model verdicts. Status intentionally NOT touched — an
+      // EXECUTING or PENDING_APPROVAL incident must never be demoted by a
+      // telemetry update.
+      failureProbability: incoming.failureProbability,
+      anomalyScore: incoming.anomalyScore,
+      risk: incoming.risk,
+      explanation: incoming.explanation,
+      shap: incoming.shap,
+    });
+
+    // Meaningful transition only: self-resolve when the REAL agent reports
+    // the system healthy again while the incident is still OPEN (the recovery
+    // worked, or the pressure passed). Dashboard-simulated ingests never
+    // self-resolve; their lifecycle stays owned by the demo episode flow.
+    if (
+      source === "agent" &&
+      active.status === "OPEN" &&
+      incoming.risk === "LOW"
+    ) {
+      await ctx.db.patch(active._id, {
+        status: "RESOLVED",
+        resolvedAt: now,
+        isHealthRestored: true,
+        mode: "AUTOMATED",
+        playbookName: "Self-resolved (telemetry normalised)",
+        executedBy: "AI_AGENT",
+      });
+      await ctx.db.insert("auditLogs", {
+        userId,
+        timestamp: now,
+        actor: "AI_AGENT",
+        action: `Incident self-resolved: ${incoming.primaryCause}`,
+        decision: "RESOLVED",
+        reason: "Real agent telemetry returned to LOW risk",
+      });
+    }
+    return;
+  }
+
+  // ── 3. No active incident → insert, with suppression rules ─────────
+  // Agent ingests carrying LOW risk with no active incident are dropped:
+  // there is nothing to heal and inserting would pollute the incident feed.
+  if (source === "agent" && incoming.risk === "LOW") return;
+
+  await ctx.db.insert("incidents", {
+    ...incoming,
+    userId,
+    deviceId,
+    scenarioKey,
+    lastSeenAt: now,
+  });
+}
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 
 // ── Pending Actions API (for Python agent) ───────────────────────────
 

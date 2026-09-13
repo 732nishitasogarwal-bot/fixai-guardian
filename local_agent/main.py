@@ -257,6 +257,10 @@ def run() -> None:
 
     sync_counter = 0
     sample_buffer: list = []
+    # Scenarios currently breaching thresholds (Fix #5 audit de-dup): an
+    # ALERT_GENERATED audit entry is emitted once per scenario episode, and the
+    # entry is forgotten when telemetry returns to LOW risk.
+    _active_scenarios: set = set()
 
     while _running:
         # ── 1. Collect real hardware metrics ────────────────────────────
@@ -295,6 +299,20 @@ def run() -> None:
             primary_cause = root_cause_map.get(
                 top_feature["feature"], "Unknown Resource Exhaustion"
             )
+            # Stable machine-readable scenario identity (Fix #5): the Convex
+            # backend groups a sustained anomaly into ONE evolving incident by
+            # matching (device, scenarioKey) among ACTIVE incidents. Keys must
+            # be deterministic — never timestamps or random values.
+            scenario_key_map = {
+                "cpu": "cpu_spike",
+                "ram": "memory_exhaustion",
+                "latency": "latency_storm",
+                "errorRate": "error_burst",
+                "disk": "disk_io_saturation",
+            }
+            scenario_key = scenario_key_map.get(
+                top_feature["feature"], "unknown_resource_exhaustion"
+            )
 
             incident = {
                 "detectedAt": int(time.time() * 1000),
@@ -302,23 +320,28 @@ def run() -> None:
                 "failureProbability": verdict["p_failure"],
                 "anomalyScore": verdict["anomaly_score"],
                 "risk": risk,
-                "rootCauseId": f"rca-{int(time.time())}",
+                "rootCauseId": f"rca-{scenario_key}",
                 "primaryCause": primary_cause,
                 "explanation": _build_explanation(
                     primary_cause, telemetry, verdict["shap"]
                 ),
                 "shap": verdict["shap"],
                 "logEvidence": [],
-                "scenarioKey": f"agent_{top_feature['feature']}",
+                "scenarioKey": scenario_key,
             }
 
-            audit_entry = {
-                "timestamp": int(time.time() * 1000),
-                "actor": "AI_AGENT",
-                "action": f"Anomaly detected — {primary_cause}",
-                "decision": "ALERT_GENERATED",
-                "reason": f"p_failure={verdict['p_failure']:.2f}, risk={risk}",
-            }
+            # Audit-log the alert only when the scenario is NEW (Fix #5: no
+            # audit flood every 5s while the same anomaly persists).
+            audit_entry = None
+            if scenario_key not in _active_scenarios:
+                _active_scenarios.add(scenario_key)
+                audit_entry = {
+                    "timestamp": int(time.time() * 1000),
+                    "actor": "AI_AGENT",
+                    "action": f"Anomaly detected — {primary_cause}",
+                    "decision": "ALERT_GENERATED",
+                    "reason": f"p_failure={verdict['p_failure']:.2f}, risk={risk}",
+                }
 
             log.warning(
                 "⚠  %s detected (risk=%s, p_fail=%.2f, anomaly=%.2f)",
@@ -327,6 +350,11 @@ def run() -> None:
                 verdict["p_failure"],
                 verdict["anomaly_score"],
             )
+
+        # Scenarios no longer breaching → forget them so a future episode
+        # logs a fresh ALERT_GENERATED.
+        if risk == "LOW":
+            _active_scenarios.clear()
 
         # ── 4. Sync to Convex (every SYNC_INTERVAL seconds) ────────────
         sync_counter += 1
