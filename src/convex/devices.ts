@@ -209,6 +209,25 @@ export const ingestTelemetry = mutation({
 // ── Pending Actions API (for Python agent) ───────────────────────────
 
 /**
+ * Live incident feed for the signed-in user, newest first.
+ * The Recovery page subscribes to this so agent-driven status transitions
+ * (PENDING_APPROVAL → EXECUTING → RESOLVED/FAILED) update the UI without a
+ * refresh. Reads are auth-scoped; writes happen through dedicated mutations.
+ */
+export const getUserIncidents = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit = 20 }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    return await ctx.db
+      .query("incidents")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .order("desc")
+      .take(limit);
+  },
+});
+
+/**
  * Query: find pending actions for a device by name.
  * Used by the agent HTTP bridge to return incidents awaiting recovery.
  * Returns incidents with status OPEN or PENDING_APPROVAL for the named device.
@@ -237,8 +256,11 @@ export const getPendingActionsForDevice = query({
 
 /**
  * Mutation: set an incident to PENDING_APPROVAL so the Python agent
- * will pick it up on its next poll.
- * Called by the React dashboard when the user clicks "Automated Fix".
+ * will pick it up on its next poll. Called by the React dashboard when the
+ * user clicks "Automated Fix" and confirms the permission modal.
+ *
+ * Returns a status object instead of throwing so the UI can render precise
+ * error states (convex mutations that throw surface as opaque errors).
  */
 export const requestAutoFix = mutation({
   args: {
@@ -247,17 +269,19 @@ export const requestAutoFix = mutation({
   },
   handler: async (ctx, { incidentId, playbookName }) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    if (!userId) return { ok: false, reason: "NOT_AUTHENTICATED" as const };
 
     const incident = await ctx.db.get(incidentId);
-    if (!incident) throw new Error("Incident not found");
-    if (incident.userId !== userId) throw new Error("Not authorized for this incident");
+    if (!incident) return { ok: false, reason: "NOT_FOUND" as const };
+    if (incident.userId !== userId) return { ok: false, reason: "FORBIDDEN" as const };
 
-    // Only allow transitioning from OPEN to PENDING_APPROVAL
-    if (incident.status !== "OPEN") {
-      throw new Error(`Cannot request auto-fix: incident is ${incident.status}`);
+    // Duplicate request guard: an incident already queued for (or being run by)
+    // the agent must not be re-queued — the backend is the source of truth.
+    if (incident.status !== "OPEN" && incident.status !== "PENDING_APPROVAL") {
+      return { ok: false, reason: "ALREADY_IN_PROGRESS" as const, status: incident.status };
     }
 
+    // Re-queuing while PENDING_APPROVAL updates the selected playbook only.
     await ctx.db.patch(incidentId, {
       status: "PENDING_APPROVAL",
       mode: "AUTOMATED",
@@ -273,7 +297,7 @@ export const requestAutoFix = mutation({
       reason: `Incident ${incidentId} escalated to automated recovery`,
     });
 
-    return { ok: true };
+    return { ok: true as const };
   },
 });
 

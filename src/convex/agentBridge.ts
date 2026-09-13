@@ -214,11 +214,12 @@ export const agentPendingActions = httpAction(async (ctx, request) => {
       { success: false, error: "Device not found", device_name: deviceName },
       404,
     );
-  }
-
-  // ── 4. Map incidents to action payloads for the Python executor ─────
+  }  // ── 4. Map incidents to action payloads for the Python executor ─────
   const actions = pendingIncidents.map((inc: any) => {
-    // Determine the playbook to execute based on the incident's root cause
+    // Preferred: the playbook the user explicitly selected on the dashboard
+    // (stored as playbookName by requestAutoFix). Fallback: root-cause →
+    // playbook mapping so agent-detected incidents stay actionable.
+    const userSelected = inc.playbookName ? PLAYBOOK_TO_ID[inc.playbookName] : undefined;
     const playbookMap: Record<string, string> = {
       "CPU Exhaustion": "kill_high_mem_process",
       "Memory Exhaustion": "kill_high_mem_process",
@@ -226,12 +227,10 @@ export const agentPendingActions = httpAction(async (ctx, request) => {
       "Network Latency Degradation": "retry_service",
       "Application Error Storm": "restart_background_service",
     };
-
-    // Use the playbook name from the incident if set, otherwise map from cause
     const playbookId =
-      inc.playbookName && PLAYBOOK_TO_ID[inc.playbookName]
-        ? PLAYBOOK_TO_ID[inc.playbookName]
-        : playbookMap[inc.primaryCause] || "flush_cache";
+      userSelected ??
+      playbookMap[inc.primaryCause] ??
+      "flush_cache";
 
     // Determine risk tier
     const riskMap: Record<string, string> = {
@@ -324,6 +323,11 @@ export const agentClaimAction = httpAction(async (ctx, request) => {
 /** Maps playbook display names to IDs used by the Python executor. */
 const PLAYBOOK_TO_ID: Record<string, string> = {
   "Flush Application Cache": "flush_cache",
+  "Restart Background Worker": "flush_cache",
+  "Restart Service Container": "kill_high_mem_process",
+  "Scale Service Instances": "flush_cache",
+  "Purge Temporary Files": "flush_cache",
+  "Database Maintenance Window": "flush_cache", // HIGH risk — agent executor hard-blocks automation anyway
   "Retry Failed Requests": "retry_service",
   "Terminate High-Memory Process": "kill_high_mem_process",
   "Restart Background Service": "restart_background_service",

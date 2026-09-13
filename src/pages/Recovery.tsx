@@ -1,3 +1,4 @@
+import { AgentExecutionCard, ModeBadge, type StoredIncidentRow } from "@/components/fixai/AgentExecutionCard";
 import { RiskTierBadge } from "@/components/fixai/badges";
 import { EmptyState } from "@/components/fixai/EmptyState";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { api } from "@/convex/_generated/api";
 import { useAgent } from "@/hooks/use-agent-context";
 import { auditCommandSafety } from "@/lib/policy";
 import { cn } from "@/lib/utils";
@@ -28,8 +30,17 @@ import {
   Wand2,
   Wrench,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery } from "convex/react";
 import { toast } from "sonner";
+
+/** Human-readable message per requestAutoFix failure reason. */
+const REQUEST_ERRORS: Record<string, string> = {
+  NOT_AUTHENTICATED: "Your session expired — sign in again and retry.",
+  NOT_FOUND: "This incident no longer exists in the backend.",
+  FORBIDDEN: "This incident belongs to a different account.",
+  ALREADY_IN_PROGRESS: "A recovery request for this incident is already queued or running.",
+};
 
 export default function Recovery() {
   const agent = useAgent();
@@ -42,10 +53,48 @@ export default function Recovery() {
     completeManualFix,
     dismissEpisode,
   } = agent;
+  const isSubmitting = isExecuting;
+
+  // ── Real-agent mode wiring ─────────────────────────────────────
+  // Live incident documents straight from Convex — the source of truth for
+  // PENDING_APPROVAL → EXECUTING → RESOLVED/FAILED transitions made by the
+  // Python agent. Also the duplicate-request guard (STEP 15).
+  const storedIncidents = useQuery(api.devices.getUserIncidents, { limit: 20 });
+  const device = useQuery(api.devices.getMyDevice, {});
+  const requestAutoFix = useMutation(api.devices.requestAutoFix);
 
   const [approveFor, setApproveFor] = useState<RecoveryOption | null>(null);
   const [confirmText, setConfirmText] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  /**
+   * REAL MODE when a device row exists (it is created on dashboard sign-in and
+   * kept fresh by the local agent's heartbeat). Demo mode otherwise — kept for
+   * the /demo route where no device/agent is present.
+   */
+  const realMode = device !== undefined && device !== null;
+  const agentOnline = device?.agentOnline ?? false;
+
+  // The live stored incident matching the current episode. Matched on the
+  // server-created rows; the newest OPEN/PENDING/EXECUTING row wins.
+  const trackedIncident: StoredIncidentRow | null = useMemo(() => {
+    if (!storedIncidents || storedIncidents.length === 0) return null;
+    const active = storedIncidents.find(
+      (i) =>
+        i.status === "OPEN" ||
+        i.status === "PENDING_APPROVAL" ||
+        i.status === "EXECUTING",
+    );
+    // Fall back to the most recent terminal-state row so resolution feedback
+    // stays visible after the agent finishes.
+    return (active ?? storedIncidents[0]) as unknown as StoredIncidentRow;
+  }, [storedIncidents]);
+
+  const trackedInFlight =
+    trackedIncident !== null &&
+    (trackedIncident.status === "PENDING_APPROVAL" ||
+      trackedIncident.status === "EXECUTING");
 
   const options = episode?.options ?? [];
   const incident = episode?.incident ?? null;
@@ -61,42 +110,111 @@ export default function Recovery() {
     }
   };
 
-  /** Fire the policy-gated execution after modal approval. */
-  const handleApprove = async () => {
-    if (!approveFor) return;
-    const safety = auditCommandSafety(approveFor.command);
-    if (!safety.safe) {
-      toast.error(safety.reason ?? "Command blocked by AST inspection");
+  /**
+   * REAL-MODE auto-fix: persist the request, never execute in the browser.
+   * The Python agent picks the incident up via GET /pending-actions →
+   * claim-action → executes → POST /resolve; the subscription below re-renders
+   * this page at every transition.
+   */
+  const handleRealAutoFix = async (option: RecoveryOption) => {
+    if (!trackedIncident) {
+      toast.error("No backend incident is tracked yet — wait for the agent to report one.");
       return;
     }
-    setApproveFor(null);
-    setConfirmText("");
-    await executeAutomated(approveFor);
-    toast.success("Automated recovery finished");
+    setSubmitting(true);
+    try {
+      const result = await requestAutoFix({
+        incidentId: trackedIncident._id,
+        playbookName: option.name,
+      });
+      if (result.ok) {
+        toast.success("Recovery request sent — waiting for your local agent");
+      } else if (result.reason === "ALREADY_IN_PROGRESS") {
+        toast.warning("This incident is already queued with the agent.");
+      } else {
+        toast.error(REQUEST_ERRORS[result.reason] ?? "Recovery request failed.");
+      }
+    } catch {
+      toast.error("Could not reach the backend — check your connection and retry.");
+    } finally {
+      setSubmitting(false);
+      setApproveFor(null);
+      setConfirmText("");
+    }
+  };
+
+  /** Fire the correct mode's flow after modal approval. */
+  const handleApprove = async () => {
+    if (!approveFor) return;
+    if (realMode) {
+      await handleRealAutoFix(approveFor);
+    } else {
+      // DEMO-MODE auto-fix: the original in-browser simulation, unchanged.
+      const safety = auditCommandSafety(approveFor.command);
+      if (!safety.safe) {
+        toast.error(safety.reason ?? "Command blocked by AST inspection");
+        return;
+      }
+      await executeAutomated(approveFor);
+      toast.success("Automated recovery finished");
+    }
   };
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Recovery Center</h1>
-        <p className={cn("mt-1 text-sm text-muted-foreground")}>
-          Dual recovery modes: follow the guided steps yourself, or approve a
-          permission-gated automated playbook.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Recovery Center</h1>
+          <p className={cn("mt-1 text-sm text-muted-foreground")}>
+            Dual recovery modes: follow the guided steps yourself, or approve a
+            permission-gated automated playbook executed by your local agent.
+          </p>
+        </div>
+        <ModeBadge mode={realMode ? "real" : "demo"} />
       </div>
 
-      {/* Active episode */}
+      {/* ── REAL MODE: live agent execution state ──────────────────────── */}
+      {realMode && trackedIncident && trackedInFlight ? (
+        <AgentExecutionCard
+          incident={trackedIncident}
+          agentOnline={agentOnline}
+          busy={submitting}
+          onRetry={() => void handleRealAutoFix(options[0])}
+        />
+      ) : null}
+
+      {/* ── REAL MODE: terminal outcome (resolved / failed) ────────────── */}
+      {realMode && trackedIncident && !trackedInFlight && trackedIncident.status !== "OPEN" ? (
+        <AgentExecutionCard
+          incident={trackedIncident}
+          agentOnline={agentOnline}
+          busy={submitting}
+          onRetry={() =>
+            void handleRealAutoFix(
+              options[0] ?? {
+                ...({ id: "flush_cache", name: "Flush Application Cache" } as RecoveryOption),
+              },
+            )
+          }
+        />
+      ) : null}
+
+      {/* Active episode (diagnosis + options; demo mode runs the sim) */}
       {!incident ? (
         <Card className="shadow-soft">
           <CardContent>
             <EmptyState
               icon={ShieldCheck}
               title="No active incident"
-              body="The agent has nothing to heal right now. Inject a fault from the Overview page to walk the full recovery loop."
+              body={
+                realMode
+                  ? "Your local agent has not reported an anomaly. Start it on the target machine and it will stream incidents here."
+                  : "The agent has nothing to heal right now. Inject a fault from the Overview page to walk the full recovery loop."
+              }
             />
-            {validationResult ? (
+            {agent.validationResult ? (
               <div className="mx-auto -mt-2 max-w-xl pb-6">
-                <ValidationSummary restored={validationResult.restored} />
+                <ValidationSummary restored={agent.validationResult.restored} />
               </div>
             ) : null}
           </CardContent>
@@ -164,13 +282,21 @@ export default function Recovery() {
                       >
                         <FileText className="size-4" /> Manual guide
                       </Button>
+                      {/* STEP 15: disabled while the backend reports the
+                          incident queued/running — state is the guard. */}
                       <Button
                         size="sm"
                         className="gap-1.5"
-                        disabled={isExecuting || opt.riskTier === "HIGH"}
+                        disabled={
+                          isSubmitting ||
+                          submitting ||
+                          opt.riskTier === "HIGH" ||
+                          (realMode && trackedInFlight)
+                        }
                         onClick={() => setApproveFor(opt)}
                       >
-                        <Wand2 className="size-4" /> Auto-fix
+                        <Wand2 className="size-4" />
+                        {realMode ? "Auto-fix (agent)" : "Auto-fix"}
                       </Button>
                     </div>
                   </CardContent>
@@ -230,34 +356,36 @@ export default function Recovery() {
         </>
       )}
 
-      {/* Execution terminal */}
-      <Card className="shadow-soft">
-        <CardHeader className="pb-3">
-          <div className="flex items-center gap-2">
-            <Terminal className="size-4.5 text-primary" />
-            <CardTitle className="text-base">Guarded execution runtime</CardTitle>
-          </div>
-          <CardDescription>
-            Live output of the last automated run — allowlisted commands only,
-            checkpoint + rollback enabled.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {executionLog.length === 0 ? (
-            <p className="rounded-lg bg-muted/50 px-3 py-6 text-center text-sm text-muted-foreground">
-              No executions yet. The runtime log streams here when you approve an automated fix.
-            </p>
-          ) : (
-            <ScrollArea className="h-44 rounded-lg bg-[oklch(0.21_0.02_240)] p-3 dark:bg-[oklch(0.14_0.02_240)]">
-              <pre className="font-mono text-xs leading-5 text-emerald-300/90">
-                {executionLog.join("\n")}
-              </pre>
-            </ScrollArea>
-          )}
-        </CardContent>
-      </Card>
+      {/* Execution terminal (demo mode only — real output lives on the agent host) */}
+      {!realMode ? (
+        <Card className="shadow-soft">
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <Terminal className="size-4.5 text-primary" />
+              <CardTitle className="text-base">Guarded execution runtime</CardTitle>
+            </div>
+            <CardDescription>
+              Live output of the last automated run — allowlisted commands only,
+              checkpoint + rollback enabled.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {executionLog.length === 0 ? (
+              <p className="rounded-lg bg-muted/50 px-3 py-6 text-center text-sm text-muted-foreground">
+                No executions yet. The runtime log streams here when you approve an automated fix.
+              </p>
+            ) : (
+              <ScrollArea className="h-44 rounded-lg bg-[oklch(0.21_0.02_240)] p-3 dark:bg-[oklch(0.14_0.02_240)]">
+                <pre className="font-mono text-xs leading-5 text-emerald-300/90">
+                  {executionLog.join("\n")}
+                </pre>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
-      {/* Validation result */}
+      {/* Validation result (demo mode) */}
       {validationResult ? (
         <Card className="shadow-soft">
           <CardHeader className="pb-3">
@@ -308,8 +436,9 @@ export default function Recovery() {
               <ShieldCheck className="size-5 text-primary" /> Approval required
             </DialogTitle>
             <DialogDescription>
-              The policy engine requires your confirmation before executing this
-              recovery action.
+              {realMode
+                ? "Your local agent will execute this recovery action after the policy gate."
+                : "The policy engine requires your confirmation before executing this recovery action."}
             </DialogDescription>
           </DialogHeader>
           {approveFor ? (
@@ -323,7 +452,9 @@ export default function Recovery() {
                   {approveFor.command}
                 </code>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  A pre-repair checkpoint will be created for automatic rollback.
+                  {realMode
+                    ? `FixAI is ready to have your local agent run this action. The agent claims it, executes the allowlisted playbook, and validates telemetry afterwards.`
+                    : "A pre-repair checkpoint will be created for automatic rollback."}{" "}
                   Rate limit: max {approveFor.riskTier === "LOW" ? 5 : 3} executions/day.
                 </p>
               </div>
@@ -343,17 +474,17 @@ export default function Recovery() {
               Cancel
             </Button>
             <Button
-              disabled={confirmText.trim().toLowerCase() !== "approve"}
+              disabled={confirmText.trim().toLowerCase() !== "approve" || submitting}
               onClick={() => void handleApprove()}
             >
-              <Wand2 className="size-4" /> Approve & execute
+              <Wand2 className="size-4" /> {realMode ? "Confirm & queue" : "Approve & execute"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Dismiss episode affordance */}
-      {incident && !isExecuting ? (
+      {/* Dismiss episode affordance (demo mode) */}
+      {incident && !isExecuting && !realMode ? (
         <div className="flex justify-end">
           <Button variant="ghost" size="sm" onClick={dismissEpisode}>
             Dismiss episode
