@@ -155,8 +155,14 @@ export const ingestTelemetry = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    // Identity is derived from the device record, not the caller's session:
+    // this mutation is invoked from BOTH the React dashboard (user session) and
+    // the Python agent bridge (X-API-Key httpAction, no session). The HTTP
+    // action authenticates the agent and resolves deviceId first, so the
+    // device row's owner is the authoritative userId for writes here.
+    const device = await ctx.db.get(args.deviceId);
+    if (!device) throw new Error("Device not found");
+    const userId = device.userId;
 
     // Keep the live window small: store only the most recent samples.
     const recent = args.samples.slice(-40);
@@ -328,8 +334,12 @@ export const resolveIncident = mutation({
     soakSeconds: v.number(),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    // Same sessionless path as ingestTelemetry: the Python agent resolves
+    // incidents through the HTTP bridge with no user session. Derive the
+    // owner from the incident row (mirrors claimIncident's pattern).
+    const incident = await ctx.db.get(args.incidentId);
+    if (!incident) throw new Error("Incident not found");
+    const userId = incident.userId;
 
     await ctx.db.patch(args.incidentId, {
       status: args.status,
