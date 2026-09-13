@@ -67,16 +67,18 @@ class ExecutionResult:
     details: dict = field(default_factory=dict)
 
 
-# ─── Playbook Registry ─────────────────────────────────────────────────
-# These are the ONLY actions the system can execute. New playbooks must
-# be added here after human review and approval.
+# ─── Playbook Registry (canonical catalog mirror — Fix #3) ─────────────
+# These are the ONLY actions the system can execute. IDs and risk tiers are
+# the canonical contract shared with src/lib/playbooks.ts and the Convex
+# `playbooks` table. New playbooks must be added to BOTH sides after human
+# review and approval.
 
 PLAYBOOKS: dict[str, PlaybookDefinition] = {
     "flush_cache": PlaybookDefinition(
         id="flush_cache",
         name="Flush Application Cache",
         risk_tier=RiskTier.LOW,
-        description="Clears temporary cache files in /tmp/fixai_cache/",
+        description="Clears stale temp/cache files to reclaim disk pressure.",
         action="flush_temp_cache",
         timeout=10,
         max_per_hour=5,
@@ -85,27 +87,36 @@ PLAYBOOKS: dict[str, PlaybookDefinition] = {
         id="retry_service",
         name="Retry Failed Requests",
         risk_tier=RiskTier.LOW,
-        description="Triggers a health-check ping to verify service connectivity",
+        description="Re-pings the local service health endpoint to clear transient failures.",
         action="health_check_retry",
         timeout=15,
         max_per_hour=10,
-    ),
-    "kill_high_mem_process": PlaybookDefinition(
-        id="kill_high_mem_process",
-        name="Terminate High-Memory Process",
-        risk_tier=RiskTier.MEDIUM,
-        description="Terminates the user-space process consuming the most RAM",
-        action="kill_top_memory_process",
-        timeout=20,
-        max_per_hour=3,
     ),
     "restart_background_service": PlaybookDefinition(
         id="restart_background_service",
         name="Restart Background Service",
         risk_tier=RiskTier.MEDIUM,
-        description="Restarts a registered background service via systemctl",
+        description="Gracefully restarts a registered user-level background service.",
         action="restart_service",
         timeout=30,
+        max_per_hour=3,
+    ),
+    "kill_high_mem_process": PlaybookDefinition(
+        id="kill_high_mem_process",
+        name="Terminate High-Memory Process",
+        risk_tier=RiskTier.MEDIUM,
+        description="Terminates the top user-space RAM consumer (denylist protected).",
+        action="kill_top_memory_process",
+        timeout=20,
+        max_per_hour=3,
+    ),
+    "purge_temp_files": PlaybookDefinition(
+        id="purge_temp_files",
+        name="Purge Temporary Files",
+        risk_tier=RiskTier.MEDIUM,
+        description="Removes stale temp artifacts scoped to FixAI's own temp dir only.",
+        action="purge_temp_files",
+        timeout=20,
         max_per_hour=3,
     ),
 }
@@ -369,6 +380,47 @@ class RecoveryExecutor:
             raise PermissionError(f"Access denied to terminate '{top_name}' (pid {top_proc.pid})")
 
     @staticmethod
+    def _purge_temp_files(params: dict) -> dict:
+        """
+        Purge stale temporary artifacts blocking the disk.
+
+        Scoped SAFETY: only FixAI's own temp dir (/tmp/fixai_cache) is ever
+        touched. Arbitrary paths are rejected — the params dict may carry a
+        `path` hint but it is validated against the allowlist below.
+        """
+        allowed_roots = {"/tmp/fixai_cache"}
+        requested = params.get("path", "/tmp/fixai_cache")
+
+        # Normalise and strictly validate: no traversal outside allowlist.
+        target = Path(requested).resolve()
+        if str(target) not in allowed_roots:
+            raise PermissionError(
+                f"Purge path '{requested}' is not in the allowlist {sorted(allowed_roots)}"
+            )
+        if not target.exists():
+            return {"path": str(target), "files_removed": 0, "bytes_freed": 0,
+                    "note": "Purge directory does not exist (nothing to do)"}
+
+        removed = 0
+        bytes_freed = 0
+        cutoff = time.time() - float(params.get("older_than_seconds", 0))
+        for f in target.rglob("*"):
+            try:
+                if f.is_file() and f.stat().st_mtime <= cutoff:
+                    size = f.stat().st_size
+                    f.unlink()
+                    removed += 1
+                    bytes_freed += size
+            except OSError:
+                continue
+
+        return {
+            "path": str(target),
+            "files_removed": removed,
+            "bytes_freed": bytes_freed,
+        }
+
+    @staticmethod
     def _restart_service(params: dict) -> dict:
         """Restart a user-level systemd service."""
         service_name = params.get("service_name")
@@ -394,6 +446,7 @@ class RecoveryExecutor:
             "health_check_retry": self._health_check_retry,
             "kill_top_memory_process": self._kill_top_memory_process,
             "restart_service": self._restart_service,
+            "purge_temp_files": self._purge_temp_files,
         }
         fn = actions.get(action_name)
         if not fn:

@@ -1,116 +1,142 @@
 import type { Playbook, RiskTier } from "./types";
 
 /**
- * Pre-audited playbook catalogue.
+ * CANONICAL PLAYBOOK CATALOG (Fix #3) — the single source of truth.
  *
- * The execution runtime only ever fires these allowlisted playbooks — the AI
- * layer passes parameters, never raw shell strings (blueprint Part 22).
- * HIGH risk actions are hard-blocked from automation at code level.
+ * These IDs are the shared contract across the entire system:
+ *   React dashboard → Convex `requestAutoFix` → HTTP bridge → Python executor.
+ *
+ * Every id below is implemented as a safe handler in
+ * `local_agent/recovery/executor.py:PLAYBOOKS`. IDs that are not implemented
+ * in the agent executor (e.g. container-only actions) are NOT listed here —
+ * we never pretend unsupported recovery actions work.
+ *
+ * HIGH risk actions are hard-blocked from automation at code level
+ * (policy engine + executor), so none exist in this catalog.
  */
 export const PLAYBOOKS: Playbook[] = [
   {
     id: "flush_cache",
     name: "Flush Application Cache",
     description:
-      "Clears stale cache entries and re-primes the hot path. Zero downtime.",
+      "Clears stale temp/cache files to reclaim disk pressure and re-prime the hot path. Zero downtime.",
     riskTier: "LOW",
     manualSteps: [
-      "Open the service console and confirm cache hit-rate is degraded",
-      "Run the cache flush command below",
-      "Watch cache hit-rate recover above 80% within 60 seconds",
+      "Confirm the disk/temp pressure in the Live Monitor view",
+      "Run the cache flush command below (scoped to FixAI's own cache dirs only)",
+      "Verify RAM/disk usage recovers within 60 seconds",
     ],
     command: "fixai cache flush --service app_service",
     autoAllowed: true,
     successProbability: 0.62,
     downtimeSeconds: 0,
+    agentExecutable: true,
+    maxExecPerHour: 5,
   },
   {
-    id: "restart_worker",
-    name: "Restart Background Worker",
+    id: "retry_service",
+    name: "Retry Failed Requests",
     description:
-      "Recycles the background worker process to release leaked handles.",
+      "Re-pings the local service health endpoint to verify connectivity and clear transient failure states.",
     riskTier: "LOW",
     manualSteps: [
-      "Identify the worker PID from the process table",
-      "Gracefully stop the worker, then start it again",
-      "Confirm the worker re-registers with the queue within 30s",
+      "Confirm the service is listening on its health port",
+      "Run the health check command below",
+      "Watch the 5xx error rate fall back under baseline",
     ],
-    command: "fixai worker restart --graceful",
+    command: "fixai healthcheck retry --url http://localhost:8000/health",
     autoAllowed: true,
     successProbability: 0.58,
-    downtimeSeconds: 3,
+    downtimeSeconds: 0,
+    agentExecutable: true,
+    maxExecPerHour: 10,
   },
   {
-    id: "restart_container",
-    name: "Restart Service Container",
+    id: "restart_background_service",
+    name: "Restart Background Service",
     description:
-      "Restarts the target container to reclaim memory and reset stuck threads.",
+      "Gracefully restarts a registered user-level background service to reset stuck threads.",
     riskTier: "MEDIUM",
     manualSteps: [
-      "Open a terminal on the host running Docker",
-      "Run the restart command below",
-      "Wait for the /health endpoint to return 200 OK",
-      "Verify RAM drops below 50% within 15 seconds",
+      "Identify the service unit name from the process table",
+      "Gracefully restart it with the command below (user-level systemd only)",
+      "Confirm the service re-registers and health returns to 200 OK",
     ],
-    command: "docker restart app_service",
+    command: "systemctl --user restart <service_name>",
+    autoAllowed: false,
+    successProbability: 0.78,
+    downtimeSeconds: 5,
+    agentExecutable: true,
+    maxExecPerHour: 3,
+  },
+  {
+    id: "kill_high_mem_process",
+    name: "Terminate High-Memory Process",
+    description:
+      "Terminates the top user-space RAM consumer (denylisted OS processes are protected).",
+    riskTier: "MEDIUM",
+    manualSteps: [
+      "Identify the highest-memory user process (Task Manager / top)",
+      "Close or terminate it gracefully yourself",
+      "Verify RAM drops below the safe threshold within 15 seconds",
+    ],
+    command: "fixai process kill --top-memory",
     autoAllowed: false,
     successProbability: 0.88,
-    downtimeSeconds: 12,
+    downtimeSeconds: 2,
+    agentExecutable: true,
+    maxExecPerHour: 3,
   },
   {
-    id: "scale_instances",
-    name: "Scale Service Instances",
-    description:
-      "Adds a service replica to absorb load and lower per-instance pressure.",
-    riskTier: "MEDIUM",
-    manualSteps: [
-      "Check current replica count and host capacity headroom",
-      "Run the scale command below",
-      "Confirm the new replica passes health checks",
-      "Watch CPU/RAM per instance fall back under baseline",
-    ],
-    command: "docker compose up -d --scale app_service=2",
-    autoAllowed: false,
-    successProbability: 0.74,
-    downtimeSeconds: 8,
-  },
-  {
-    id: "purge_tmp",
+    id: "purge_temp_files",
     name: "Purge Temporary Files",
     description:
-      "Safely removes stale temp artifacts blocking the disk (allowlisted paths).",
+      "Safely removes stale temp artifacts (scoped to /tmp/fixai_cache only) blocking the disk.",
     riskTier: "MEDIUM",
     manualSteps: [
       "Run df -h to confirm the mount is above the safe threshold",
-      "Run the purge command below (scoped to /tmp only)",
+      "Run the purge command below (scoped to FixAI's temp dir only)",
       "Confirm disk usage falls below 50%",
     ],
-    command: "fixai disk purge --path /tmp --older-than 24h",
+    command: "fixai disk purge --path /tmp/fixai_cache",
     autoAllowed: false,
     successProbability: 0.81,
     downtimeSeconds: 2,
-  },
-  {
-    id: "db_maintenance",
-    name: "Database Maintenance Window",
-    description:
-      "Runs VACUUM/ANALYZE and re-seats the connection pool. Can interrupt traffic.",
-    riskTier: "HIGH",
-    manualSteps: [
-      "Announce a maintenance window to downstream teams",
-      "Enable connection draining, then run the maintenance command",
-      "Verify connection pool saturation returns under 60%",
-      "Re-enable traffic and watch error rates",
-    ],
-    command: "fixai db maintenance --vacuum --reseat-pool",
-    autoAllowed: false,
-    successProbability: 0.69,
-    downtimeSeconds: 45,
+    agentExecutable: true,
+    maxExecPerHour: 3,
   },
 ];
 
+/**
+ * BACKWARD COMPATIBILITY (STEP 9).
+ * Incidents created before Fix #3 may carry the old dashboard-only playbook
+ * names/ids. This map resolves them to their nearest canonical equivalent so
+ * old rows stay actionable without ever executing something the agent does
+ * not implement. Read-only compatibility — never used for NEW requests.
+ */
+export const LEGACY_PLAYBOOK_IDS: Record<string, string> = {
+  restart_worker: "restart_background_service",
+  restart_container: "kill_high_mem_process",
+  scale_instances: "retry_service",
+  purge_tmp: "purge_temp_files",
+  db_maintenance: "flush_cache", // HIGH risk was never automatable anyway
+  // Old display-name keys stored by pre-Fix-#3 requestAutoFix calls:
+  "Restart Background Worker": "restart_background_service",
+  "Restart Service Container": "kill_high_mem_process",
+  "Scale Service Instances": "retry_service",
+  "Purge Temporary Files": "purge_temp_files",
+  "Database Maintenance Window": "flush_cache",
+  "Terminate High-Memory Process": "kill_high_mem_process",
+  "Retry Failed Requests": "retry_service",
+};
+
 export function getPlaybook(id: string): Playbook | undefined {
   return PLAYBOOKS.find((p) => p.id === id);
+}
+
+/** Resolve a legacy/display id to the canonical id (identity when already canonical). */
+export function canonicalPlaybookId(id: string): string {
+  return LEGACY_PLAYBOOK_IDS[id] ?? (getPlaybook(id) ? id : id);
 }
 
 export function riskTierColor(tier: RiskTier): string {

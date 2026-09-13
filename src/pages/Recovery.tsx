@@ -40,6 +40,9 @@ const REQUEST_ERRORS: Record<string, string> = {
   NOT_FOUND: "This incident no longer exists in the backend.",
   FORBIDDEN: "This incident belongs to a different account.",
   ALREADY_IN_PROGRESS: "A recovery request for this incident is already queued or running.",
+  UNKNOWN_PLAYBOOK: "This playbook is not in the approved recovery catalog.",
+  PLAYBOOK_DISABLED: "This playbook is currently disabled for automation.",
+  HIGH_RISK_BLOCKED: "HIGH risk actions are hard-blocked from automated execution.",
 };
 
 export default function Recovery() {
@@ -125,12 +128,19 @@ export default function Recovery() {
     try {
       const result = await requestAutoFix({
         incidentId: trackedIncident._id,
+        playbookId: option.id,
         playbookName: option.name,
       });
       if (result.ok) {
         toast.success("Recovery request sent — waiting for your local agent");
       } else if (result.reason === "ALREADY_IN_PROGRESS") {
         toast.warning("This incident is already queued with the agent.");
+      } else if (result.reason === "UNKNOWN_PLAYBOOK") {
+        toast.error("This playbook is not in the approved catalog.");
+      } else if (result.reason === "PLAYBOOK_DISABLED") {
+        toast.error("This playbook is currently disabled and cannot be automated.");
+      } else if (result.reason === "HIGH_RISK_BLOCKED") {
+        toast.error("HIGH risk actions are hard-blocked from automation.");
       } else {
         toast.error(REQUEST_ERRORS[result.reason] ?? "Recovery request failed.");
       }
@@ -189,13 +199,16 @@ export default function Recovery() {
           incident={trackedIncident}
           agentOnline={agentOnline}
           busy={submitting}
-          onRetry={() =>
+          onRetry={() => {
+            // Prefer the playbook actually stored on the incident (its canonical
+            // id), falling back to the top-ranked option from the live episode.
+            const stored = options.find((o) => o.id === trackedIncident.playbookId);
             void handleRealAutoFix(
-              options[0] ?? {
-                ...({ id: "flush_cache", name: "Flush Application Cache" } as RecoveryOption),
-              },
-            )
-          }
+              stored ??
+                options[0] ??
+                ({ id: "flush_cache", name: "Flush Application Cache" } as RecoveryOption),
+            );
+          }}
         />
       ) : null}
 

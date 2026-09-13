@@ -74,6 +74,14 @@ export interface Playbook {
   /** Rough success probability used by the utility ranking. */
   successProbability: number;
   downtimeSeconds: number;
+  /**
+   * True when the local Python agent implements a safe handler for this
+   * playbook. Canonical catalog entries are all executable; the flag exists
+   * so future server-only playbooks can be displayed without being queued.
+   */
+  agentExecutable: boolean;
+  /** Max executions per hour enforced by the agent executor. */
+  maxExecPerHour: number;
 }
 
 export interface RecoveryOption extends Playbook {

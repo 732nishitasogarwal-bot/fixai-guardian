@@ -29,6 +29,8 @@ export interface StoredIncidentRow {
   primaryCause: string;
   explanation: string;
   mode?: "MANUAL" | "AUTOMATED";
+  /** Canonical catalog id stored on the incident by requestAutoFix (Fix #3). */
+  playbookId?: string;
   playbookName?: string;
   executedBy?: string;
   isHealthRestored?: boolean;

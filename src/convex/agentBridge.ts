@@ -216,34 +216,19 @@ export const agentPendingActions = httpAction(async (ctx, request) => {
     );
   }  // ── 4. Map incidents to action payloads for the Python executor ─────
   const actions = pendingIncidents.map((inc: any) => {
-    // Preferred: the playbook the user explicitly selected on the dashboard
-    // (stored as playbookName by requestAutoFix). Fallback: root-cause →
-    // playbook mapping so agent-detected incidents stay actionable.
-    const userSelected = inc.playbookName ? PLAYBOOK_TO_ID[inc.playbookName] : undefined;
-    const playbookMap: Record<string, string> = {
-      "CPU Exhaustion": "kill_high_mem_process",
-      "Memory Exhaustion": "kill_high_mem_process",
-      "Disk I/O Saturation": "flush_cache",
-      "Network Latency Degradation": "retry_service",
-      "Application Error Storm": "restart_background_service",
-    };
-    const playbookId =
-      userSelected ??
-      playbookMap[inc.primaryCause] ??
-      "flush_cache";
-
-    // Determine risk tier
-    const riskMap: Record<string, string> = {
-      LOW: "LOW",
-      MEDIUM: "MEDIUM",
-      HIGH: "HIGH",
-    };
+    // Fix #3: the canonical playbookId travels with the incident, unchanged
+    // from dashboard → bridge → agent. Legacy rows (pre-catalog playbookName
+    // or old dashboard ids) resolve through the shared legacy map.
+    const playbookRef = inc.playbookId ?? inc.playbookName ?? undefined;
+    const playbookId = playbookRef
+      ? resolveLegacyPlaybookId(playbookRef)
+      : causeToPlaybookId(inc.primaryCause);
 
     return {
       incidentId: inc._id,
       deviceId: inc.deviceId,
       status: inc.status,
-      risk: riskMap[inc.risk] || "MEDIUM",
+      risk: inc.risk,
       playbookId,
       playbookName: inc.playbookName || inc.primaryCause,
       parameters: {}, // typed params, never raw shell
@@ -320,18 +305,51 @@ export const agentClaimAction = httpAction(async (ctx, request) => {
 
 // ─── Helper functions ──────────────────────────────────────────────────
 
-/** Maps playbook display names to IDs used by the Python executor. */
-const PLAYBOOK_TO_ID: Record<string, string> = {
-  "Flush Application Cache": "flush_cache",
-  "Restart Background Worker": "flush_cache",
-  "Restart Service Container": "kill_high_mem_process",
-  "Scale Service Instances": "flush_cache",
-  "Purge Temporary Files": "flush_cache",
-  "Database Maintenance Window": "flush_cache", // HIGH risk — agent executor hard-blocks automation anyway
-  "Retry Failed Requests": "retry_service",
-  "Terminate High-Memory Process": "kill_high_mem_process",
-  "Restart Background Service": "restart_background_service",
-};
+// ─── Fix #3 playbook id resolution ────────────────────────────────────
+
+/**
+ * Legacy compatibility (STEP 9): incidents created before the unified
+ * catalog may store old dashboard ids or display names. Resolve them to the
+ * canonical agent-executable ids. Canonical ids pass through unchanged.
+ */
+function resolveLegacyPlaybookId(ref: string): string {
+  const LEGACY: Record<string, string> = {
+    restart_worker: "restart_background_service",
+    restart_container: "kill_high_mem_process",
+    scale_instances: "retry_service",
+    purge_tmp: "purge_temp_files",
+    db_maintenance: "flush_cache",
+    "Restart Background Worker": "restart_background_service",
+    "Restart Service Container": "kill_high_mem_process",
+    "Scale Service Instances": "retry_service",
+    "Purge Temporary Files": "purge_temp_files",
+    "Database Maintenance Window": "flush_cache",
+    "Terminate High-Memory Process": "kill_high_mem_process",
+    "Retry Failed Requests": "retry_service",
+    "Restart Background Service": "restart_background_service",
+    "Flush Application Cache": "flush_cache",
+  };
+  return LEGACY[ref] ?? ref;
+}
+
+/**
+ * Root-cause → playbook fallback for agent-detected incidents that were never
+ * queued through the dashboard (no stored playbookId). Kept minimal and
+ * aligned with the canonical catalog ids.
+ */
+function causeToPlaybookId(cause: string | undefined): string {
+  const CAUSE_MAP: Record<string, string> = {
+    "CPU Exhaustion": "kill_high_mem_process",
+    "CPU Starvation": "kill_high_mem_process",
+    "Memory Exhaustion": "kill_high_mem_process",
+    "Storage Exhaustion": "purge_temp_files",
+    "Disk I/O Saturation": "flush_cache",
+    "Network Latency Degradation": "retry_service",
+    "Application Error Storm": "restart_background_service",
+    "Database Connection Failure": "restart_background_service",
+  };
+  return (cause && CAUSE_MAP[cause]) || "flush_cache";
+}
 
 function requireApiKey(request: Request): boolean {
   const apiKey = request.headers.get("X-API-Key");

@@ -97,6 +97,8 @@ const schema = defineSchema(
       ),
       logEvidence: v.array(v.string()),
       mode: v.optional(v.union(v.literal("MANUAL"), v.literal("AUTOMATED"))),
+      /** Canonical playbook id (playbooks table) selected for automated recovery. */
+      playbookId: v.optional(v.string()),
       playbookName: v.optional(v.string()),
       policyDecision: v.optional(
         v.union(v.literal("ALLOWED"), v.literal("DENIED"), v.literal("BLOCKED")),
@@ -130,6 +132,32 @@ const schema = defineSchema(
       isAutoApproved: v.boolean(),
       maxExecPerDay: v.number(),
     }).index("by_user_and_playbook", ["userId", "playbookId"]),
+
+    // ── Canonical playbook catalog (Fix #3) ─────────────────────────────
+    // Single source of truth shared by the dashboard, the HTTP bridge, and
+    // the Python executor. Seeded idempotently via internal mutation.
+    playbooks: defineTable({
+      /** Canonical id, e.g. "flush_cache" — identical on dashboard and agent. */
+      playbookId: v.string(),
+      name: v.string(),
+      description: v.string(),
+      riskTier: v.union(
+        v.literal("LOW"),
+        v.literal("MEDIUM"),
+        v.literal("HIGH"),
+      ),
+      /** False = executor will refuse; playbook visible for manual guidance only. */
+      enabled: v.boolean(),
+      /** MEDIUM+ playbooks require the dashboard approval flow before the agent runs them. */
+      requiresApproval: v.boolean(),
+      agentExecutable: v.boolean(),
+      /** Typed parameter schema names — the bridge never ships raw shell. */
+      parameters: v.array(v.string()),
+      maxExecPerHour: v.number(),
+      catalogVersion: v.number(),
+    })
+      .index("by_playbook_id", ["playbookId"])
+      .index("by_catalog_version", ["catalogVersion"]),
   },
   {
     schemaValidation: false,

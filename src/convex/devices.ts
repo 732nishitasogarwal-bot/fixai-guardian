@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
+import { LEGACY_PLAYBOOK_IDS } from "../lib/playbooks";
 
 /**
  * Device sync: upserts a single "primary" device per user that the simulated
@@ -342,6 +343,30 @@ export const getUserIncidents = query({
 });
 
 /**
+ * Look up the canonical playbook row for an incoming playbook reference.
+ *
+ * Accepts: a canonical id ("flush_cache"), a legacy dashboard id
+ * ("restart_worker"), or a pre-Fix-#3 display name ("Restart Background
+ * Worker"). Returns null when the reference maps to nothing actionable.
+ */
+async function resolvePlaybook(
+  ctx: MutationCtx,
+  playbookRef: string,
+): Promise<Doc<"playbooks"> | null> {
+  const tryIds = [playbookRef, LEGACY_PLAYBOOK_IDS[playbookRef]].filter(
+    (id): id is string => typeof id === "string",
+  );
+  for (const id of tryIds) {
+    const row = await ctx.db
+      .query("playbooks")
+      .withIndex("by_playbook_id", (q) => q.eq("playbookId", id))
+      .first();
+    if (row) return row;
+  }
+  return null;
+}
+
+/**
  * Query: find pending actions for a device by name.
  * Used by the agent HTTP bridge to return incidents awaiting recovery.
  * Returns incidents with status OPEN or PENDING_APPROVAL for the named device.
@@ -379,9 +404,13 @@ export const getPendingActionsForDevice = query({
 export const requestAutoFix = mutation({
   args: {
     incidentId: v.id("incidents"),
-    playbookName: v.string(),
+    /** Canonical playbook id from the shared catalog (src/lib/playbooks.ts). */
+    playbookId: v.optional(v.string()),
+    /** Display name kept for human-readable audit rows; also accepted alone
+     *  from legacy clients (resolved through the legacy id map). */
+    playbookName: v.optional(v.string()),
   },
-  handler: async (ctx, { incidentId, playbookName }) => {
+  handler: async (ctx, { incidentId, playbookId, playbookName }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { ok: false, reason: "NOT_AUTHENTICATED" as const };
 
@@ -389,24 +418,41 @@ export const requestAutoFix = mutation({
     if (!incident) return { ok: false, reason: "NOT_FOUND" as const };
     if (incident.userId !== userId) return { ok: false, reason: "FORBIDDEN" as const };
 
+    // Fix #3: validate the requested playbook against the canonical catalog.
+    // The canonical playbookId is preferred; legacy display-name-only calls
+    // resolve transparently through the legacy map. Unknown ids are rejected.
+    const playbookRef = playbookId ?? playbookName;
+    if (!playbookRef) return { ok: false, reason: "UNKNOWN_PLAYBOOK" as const };
+    const playbook = await resolvePlaybook(ctx, playbookRef);
+    if (!playbook) return { ok: false, reason: "UNKNOWN_PLAYBOOK" as const };
+    if (!playbook.enabled || !playbook.agentExecutable) {
+      return { ok: false, reason: "PLAYBOOK_DISABLED" as const };
+    }
+    if (playbook.riskTier === "HIGH") {
+      return { ok: false, reason: "HIGH_RISK_BLOCKED" as const };
+    }
+
     // Duplicate request guard: an incident already queued for (or being run by)
     // the agent must not be re-queued — the backend is the source of truth.
     if (incident.status !== "OPEN" && incident.status !== "PENDING_APPROVAL") {
       return { ok: false, reason: "ALREADY_IN_PROGRESS" as const, status: incident.status };
     }
 
+    const name = playbookName ?? playbook.name;
+
     // Re-queuing while PENDING_APPROVAL updates the selected playbook only.
     await ctx.db.patch(incidentId, {
       status: "PENDING_APPROVAL",
       mode: "AUTOMATED",
-      playbookName,
+      playbookId: playbook.playbookId,
+      playbookName: name,
     });
 
     await ctx.db.insert("auditLogs", {
       userId,
       timestamp: Date.now(),
       actor: "USER",
-      action: `Requested auto-fix: ${playbookName}`,
+      action: `Requested auto-fix: ${name} (${playbook.playbookId})`,
       decision: "PENDING_APPROVAL",
       reason: `Incident ${incidentId} escalated to automated recovery`,
     });
@@ -435,10 +481,24 @@ export const claimIncident = mutation({
       return { ok: false, reason: `Already in status: ${incident.status}` };
     }
 
-    // Atomic claim: patch to EXECUTING
+    // Fix #3 safety gate: the stored playbook must exist in the canonical
+    // catalog, be enabled, and be agent-executable. Legacy incidents without
+    // a stored id keep working — their playbookName falls back through the
+    // legacy map inside resolvePlaybook.
+    const playbookRef = incident.playbookId ?? incident.playbookName ?? "";
+    const playbook = playbookRef ? await resolvePlaybook(ctx, playbookRef) : null;
+    if (playbookRef && !playbook) {
+      return { ok: false, reason: `Unknown playbook '${playbookRef}' — not in catalog` };
+    }
+    if (playbook && (!playbook.enabled || !playbook.agentExecutable)) {
+      return { ok: false, reason: `Playbook '${playbook.playbookId}' is disabled` };
+    }
+
+    // Atomic claim: patch to EXECUTING (persist the canonical id on legacy rows)
     await ctx.db.patch(incidentId, {
       status: "EXECUTING",
       executedBy: agentName,
+      playbookId: playbook?.playbookId ?? incident.playbookId,
     });
 
     // Audit log — use the device's userId

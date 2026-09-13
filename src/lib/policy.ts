@@ -21,11 +21,10 @@ import type {
 
 export const DEFAULT_PERMISSIONS: ActionPermission[] = [
   { playbookId: "flush_cache", riskTier: "LOW", isAutoApproved: true, maxExecPerDay: 5 },
-  { playbookId: "restart_worker", riskTier: "LOW", isAutoApproved: true, maxExecPerDay: 5 },
-  { playbookId: "restart_container", riskTier: "MEDIUM", isAutoApproved: false, maxExecPerDay: 3 },
-  { playbookId: "scale_instances", riskTier: "MEDIUM", isAutoApproved: false, maxExecPerDay: 3 },
-  { playbookId: "purge_tmp", riskTier: "MEDIUM", isAutoApproved: false, maxExecPerDay: 2 },
-  { playbookId: "db_maintenance", riskTier: "HIGH", isAutoApproved: false, maxExecPerDay: 0 },
+  { playbookId: "retry_service", riskTier: "LOW", isAutoApproved: true, maxExecPerDay: 10 },
+  { playbookId: "restart_background_service", riskTier: "MEDIUM", isAutoApproved: false, maxExecPerDay: 3 },
+  { playbookId: "kill_high_mem_process", riskTier: "MEDIUM", isAutoApproved: false, maxExecPerDay: 3 },
+  { playbookId: "purge_temp_files", riskTier: "MEDIUM", isAutoApproved: false, maxExecPerDay: 2 },
 ];
 
 /** LLM/simulated-command guard: intercept destructive patterns (AST check). */
@@ -153,9 +152,10 @@ export function rankRecoveryOptions(
   permissions: ActionPermission[],
 ): RecoveryOption[] {
   const costOfAction = (p: Playbook): number => {
-    // Disk pressure → purging is more valuable; memory → restart more valuable.
-    if (p.id === "purge_tmp") return current.disk / 100;
-    if (p.id === "restart_container") return current.ram / 100;
+    // Disk pressure → purging is more valuable; memory → killing the top RAM
+    // consumer is more valuable; cache pressure → flushing is more valuable.
+    if (p.id === "purge_temp_files") return current.disk / 100;
+    if (p.id === "kill_high_mem_process") return current.ram / 100;
     if (p.id === "flush_cache") return current.latency / 5000;
     return 0.3;
   };
